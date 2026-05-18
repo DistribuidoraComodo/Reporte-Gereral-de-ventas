@@ -1290,7 +1290,11 @@ elif rol == "Gerencia":
         # Filtro por vendedor dentro del panel mensual
         vends_mens = ["Todos"] + sorted(ventas_rank["vendedor"].dropna().unique().tolist())
         sel_vend_mens = st.selectbox("Ver vendedor:", vends_mens, key="mens_vend_g")
-        ventas_mens = ventas_rank if sel_vend_mens == "Todos" else ventas_rank[ventas_rank["vendedor"] == sel_vend_mens]
+        # "Todos" usa ventas_g completo (igual que Excel); vendedor específico filtra por nombre
+        if sel_vend_mens == "Todos":
+            ventas_mens = ventas_g
+        else:
+            ventas_mens = ventas_g[ventas_g["vendedor"] == sel_vend_mens]
 
         st.markdown(f"#### Facturación mensual — {sel_vend_mens}")
         st.dataframe(tabla_mensual(ventas_mens), use_container_width=True)
