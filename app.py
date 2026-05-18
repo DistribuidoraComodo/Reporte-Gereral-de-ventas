@@ -452,17 +452,17 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
     # ── Buscador con botón limpiar ────────────────────────────────────────────
     st.markdown("#### 🔍 Buscar cliente")
     key_busq = f"{key_prefix}_busq_cli"
-    if key_busq not in st.session_state:
+
+    def _limpiar_busq():
         st.session_state[key_busq] = ""
 
     col_inp, col_btn = st.columns([5, 1])
+    with col_btn:
+        st.button("🗑️ Limpiar", key=f"{key_prefix}_limpiar",
+                  on_click=_limpiar_busq, use_container_width=True)
     with col_inp:
         busqueda = st.text_input("Nombre o código:", placeholder="Ej: GARCIA o 7088",
                                  key=key_busq, label_visibility="collapsed")
-    with col_btn:
-        if st.button("🗑️ Limpiar", key=f"{key_prefix}_limpiar", use_container_width=True):
-            st.session_state[key_busq] = ""
-            st.rerun()
 
     if not busqueda or not busqueda.strip():
         st.info("Ingresá el nombre o código del cliente para ver su análisis.")
