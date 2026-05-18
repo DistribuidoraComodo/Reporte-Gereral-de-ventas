@@ -27,6 +27,9 @@ MESES_FULL = {1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
 # ── Carga de datos ────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Cargando datos...")
 def cargar_datos(archivo):
+    import io
+    if isinstance(archivo, (bytes, bytearray)):
+        archivo = io.BytesIO(archivo)
     # -- Hoja Ventas --
     df_v = pd.read_excel(archivo, sheet_name="Ventas")
     nombres_v = [
@@ -79,6 +82,9 @@ def cargar_datos(archivo):
 
 @st.cache_data(show_spinner="Cargando coordenadas...")
 def cargar_coords(archivo):
+    import io
+    if isinstance(archivo, (bytes, bytearray)):
+        archivo = io.BytesIO(archivo)
     df = pd.read_excel(archivo)
     cols_orig = list(df.columns)
     df.columns = [str(c).strip() for c in df.columns]
@@ -803,28 +809,28 @@ COORDS_URL = f"https://drive.google.com/uc?export=download&id={GDRIVE_COORDS_ID}
 
 @st.cache_data(show_spinner="Cargando archivo de ventas...")
 def cargar_desde_url(url):
-    import requests, io, re
+    """Descarga un archivo desde Google Drive y devuelve los bytes crudos."""
+    import requests, re
     session = requests.Session()
     r = session.get(url, allow_redirects=True)
     if r.status_code != 200:
         return None
-    # Google Drive muestra una advertencia de "virus scan" para archivos grandes.
-    # Detectamos si la respuesta es HTML (no el archivo) y seguimos con el token de confirmación.
+    # Google Drive muestra advertencia de "virus scan" para archivos grandes
     content_type = r.headers.get("Content-Type", "")
     if "text/html" in content_type:
         token_match = re.search(r'confirm=([0-9A-Za-z_\-]+)', r.text)
         if token_match:
-            confirm_url = url + "&confirm=" + token_match.group(1)
-            r = session.get(confirm_url, allow_redirects=True)
+            r = session.get(url + "&confirm=" + token_match.group(1), allow_redirects=True)
         else:
-            # Nuevo formato de Google Drive: buscar en el form de descarga
             uuid_match = re.search(r'uuid=([0-9A-Za-z_\-]+)', r.text)
             if uuid_match:
-                confirm_url = f"https://drive.usercontent.google.com/download?id={GDRIVE_FILE_ID}&export=download&confirm=t&uuid={uuid_match.group(1)}"
+                file_id = re.search(r'id=([^&]+)', url)
+                file_id = file_id.group(1) if file_id else ""
+                confirm_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t&uuid={uuid_match.group(1)}"
                 r = session.get(confirm_url, allow_redirects=True)
     if r.status_code != 200 or len(r.content) < 1000:
         return None
-    return io.BytesIO(r.content)
+    return r.content  # Devuelve bytes, no BytesIO
 
 # ── Carga automática de ambos archivos ───────────────────────────────────────
 archivo        = cargar_desde_url(EXCEL_URL)
