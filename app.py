@@ -846,8 +846,26 @@ if rol == "Vendedor":
     cod_sel   = vdf[vdf["vendedor_asignado"] == vendedor_sel]["cod_vendedor"].iloc[0]
     # Clientes asignados en la base (ya filtrada por clasificación)
     base_v    = df_base_filtrada[df_base_filtrada["cod_vendedor"] == cod_sel].copy()
-    clientes_asignados = base_v["cod_cliente"].unique()
-    ventas_v  = df_ventas_filtrada[df_ventas_filtrada["cod_cliente"].isin(clientes_asignados)].copy()
+
+    # Ventas filtradas por cod_vendedor en la hoja Ventas (igual que una tabla dinámica de Excel)
+    # Esto asegura que coincida con el total real del vendedor
+    ventas_v  = df_ventas_filtrada[df_ventas_filtrada["cod_vendedor"] == cod_sel].copy()
+
+    # Agregar a la base los clientes que tienen ventas asignadas a este vendedor
+    # pero no están en la base (cambios de vendedor, clientes no dados de alta, etc.)
+    cods_en_ventas = set(ventas_v["cod_cliente"].dropna().unique())
+    cods_en_base   = set(base_v["cod_cliente"].dropna().unique())
+    cods_extra     = cods_en_ventas - cods_en_base
+    if cods_extra:
+        extra_cli = (
+            ventas_v[ventas_v["cod_cliente"].isin(cods_extra)]
+            [["cod_cliente","cliente","localidad","provincia"]]
+            .drop_duplicates("cod_cliente")
+            .rename(columns={"cliente": "razon_social"})
+        )
+        extra_cli["cod_vendedor"]      = cod_sel
+        extra_cli["vendedor_asignado"] = vendedor_sel
+        base_v = pd.concat([base_v, extra_cli], ignore_index=True)
 
     nombre_limpio = vendedor_sel.split(")")[-1].strip() if ")" in vendedor_sel else vendedor_sel
 
