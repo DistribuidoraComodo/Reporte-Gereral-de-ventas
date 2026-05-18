@@ -847,9 +847,9 @@ if rol == "Vendedor":
     # Clientes asignados en la base (ya filtrada por clasificación)
     base_v    = df_base_filtrada[df_base_filtrada["cod_vendedor"] == cod_sel].copy()
 
-    # Ventas filtradas por cod_vendedor en la hoja Ventas (igual que una tabla dinámica de Excel)
-    # Esto asegura que coincida con el total real del vendedor
-    ventas_v  = df_ventas_filtrada[df_ventas_filtrada["cod_vendedor"] == cod_sel].copy()
+    # Ventas filtradas por cod_vendedor directamente desde la hoja Ventas completa
+    # (igual que una tabla dinámica de Excel — incluye clientes que no están en la base)
+    ventas_v  = df_ventas[df_ventas["cod_vendedor"] == cod_sel].copy()
 
     # Clientes con ventas asignadas a este vendedor pero no en su base actual
     cods_en_ventas = set(ventas_v["cod_cliente"].dropna().unique())
