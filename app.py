@@ -744,9 +744,26 @@ EXCEL_URL = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}"
 
 @st.cache_data(show_spinner="Cargando archivo de ventas...")
 def cargar_desde_url(url):
-    import requests, io
-    r = requests.get(url, allow_redirects=True)
+    import requests, io, re
+    session = requests.Session()
+    r = session.get(url, allow_redirects=True)
     if r.status_code != 200:
+        return None
+    # Google Drive muestra una advertencia de "virus scan" para archivos grandes.
+    # Detectamos si la respuesta es HTML (no el archivo) y seguimos con el token de confirmación.
+    content_type = r.headers.get("Content-Type", "")
+    if "text/html" in content_type:
+        token_match = re.search(r'confirm=([0-9A-Za-z_\-]+)', r.text)
+        if token_match:
+            confirm_url = url + "&confirm=" + token_match.group(1)
+            r = session.get(confirm_url, allow_redirects=True)
+        else:
+            # Nuevo formato de Google Drive: buscar en el form de descarga
+            uuid_match = re.search(r'uuid=([0-9A-Za-z_\-]+)', r.text)
+            if uuid_match:
+                confirm_url = f"https://drive.usercontent.google.com/download?id={GDRIVE_FILE_ID}&export=download&confirm=t&uuid={uuid_match.group(1)}"
+                r = session.get(confirm_url, allow_redirects=True)
+    if r.status_code != 200 or len(r.content) < 1000:
         return None
     return io.BytesIO(r.content)
 
