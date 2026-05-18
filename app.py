@@ -863,18 +863,36 @@ if rol == "Vendedor":
     fact_mes_ant = ventas_v[(ventas_v["mes"]==mes_ant) & (ventas_v["año"]==año_ant_mes)]["facturacion"].sum()
     var_mes = (fact_mes - fact_mes_ant) / fact_mes_ant * 100 if fact_mes_ant else 0
 
+    # Slider para umbral de actividad (días)
+    dias_umbral = st.slider(
+        "📅 Considerar cliente **activo** si compró en los últimos:",
+        min_value=30, max_value=365, value=90, step=10,
+        format="%d días", key="v_dias_umbral"
+    )
+
     resumen = resumen_clientes(base_v, ventas_v, hoy.strftime("%Y-%m-%d"))
+    # Recalcular estado según umbral elegido por el vendedor
+    resumen["estado"] = resumen["dias_sin_compra"].apply(
+        lambda d: "SIN COMPRAS" if d == 9999 else ("ACTIVO" if d <= dias_umbral else "INACTIVO")
+    )
     activos      = (resumen["estado"] == "ACTIVO").sum()
     inactivos    = (resumen["estado"] == "INACTIVO").sum()
     sin_compras  = (resumen["estado"] == "SIN COMPRAS").sum()
     total_cli    = len(resumen)
 
+    nombre_mes_act = MESES_FULL.get(mes_act, "")
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("💰 Facturación del mes",    fmt_peso(fact_mes), f"{var_mes:+.1f}% vs mes ant.")
+    c1.metric(f"💰 Facturación {nombre_mes_act} {año_act}", fmt_peso(fact_mes), f"{var_mes:+.1f}% vs {MESES_FULL.get(mes_ant, '')}")
     c2.metric("🏢 Clientes asignados",      total_cli)
     c3.metric("✅ Activos",                 activos)
     c4.metric("⚠️ Inactivos",              inactivos)
-    c5.metric("❌ Sin compras en período", sin_compras)
+    c5.metric("❌ Sin compras",            sin_compras)
+
+    st.caption(
+        f"✅ **Activo** = compró en los últimos **{dias_umbral} días**  |  "
+        f"⚠️ **Inactivo** = sin compras entre {dias_umbral} y 9999 días  |  "
+        f"❌ **Sin compras** = no registra ventas en el período cargado"
+    )
 
     st.divider()
 
@@ -964,6 +982,25 @@ if rol == "Vendedor":
     with tab_mens:
         st.markdown("#### Facturación mensual por año")
         st.dataframe(tabla_mensual(ventas_v), use_container_width=True)
+
+        # ── Variación porcentual mes a mes ──
+        st.markdown("#### Variación % mes a mes")
+        evol_var = ventas_v.groupby(["año","mes"])["facturacion"].sum().reset_index().sort_values(["año","mes"])
+        evol_var["var_pct"] = evol_var["facturacion"].pct_change() * 100
+        # Resetear en cambio de año (no comparar dic año X con ene año X+1)
+        for i in evol_var.index:
+            if evol_var.loc[i, "mes"] == 1:
+                evol_var.loc[i, "var_pct"] = None
+        evol_var["Mes"] = evol_var["mes"].map(MESES_FULL)
+        evol_var["Año"] = evol_var["año"].astype(str)
+        evol_var["Facturación"] = evol_var["facturacion"].apply(fmt_peso)
+        evol_var["Variación vs mes anterior"] = evol_var["var_pct"].apply(
+            lambda v: "—" if pd.isna(v) else (f"▲ {v:.1f}%" if v >= 0 else f"▼ {abs(v):.1f}%")
+        )
+        st.dataframe(
+            evol_var[["Año","Mes","Facturación","Variación vs mes anterior"]],
+            use_container_width=True, hide_index=True
+        )
 
         evol = ventas_v.groupby(["año","mes"])["facturacion"].sum().reset_index()
         evol["año"] = evol["año"].astype(str)
