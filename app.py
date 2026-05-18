@@ -739,8 +739,10 @@ def mapa_clientes(resumen, df_coords, color_por="estado", add_vendedor_col=None,
 
 
 # ── Carga automática del Excel desde GitHub ───────────────────────────────────
-GDRIVE_FILE_ID = "1w2I5XaswfouEzS7qZXnPde7smNTmP1--"
-EXCEL_URL = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}"
+GDRIVE_FILE_ID    = "1w2I5XaswfouEzS7qZXnPde7smNTmP1--"
+GDRIVE_COORDS_ID  = "1neUDqvhShoVxtLva7YHHhWY6ocpkUKJw"
+EXCEL_URL  = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}"
+COORDS_URL = f"https://drive.google.com/uc?export=download&id={GDRIVE_COORDS_ID}"
 
 @st.cache_data(show_spinner="Cargando archivo de ventas...")
 def cargar_desde_url(url):
@@ -767,18 +769,19 @@ def cargar_desde_url(url):
         return None
     return io.BytesIO(r.content)
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 📊 Reporte General de Ventas")
-    archivo_coords = st.file_uploader("📍 Excel de coordenadas (opcional)", type=["xlsx","xls"])
-    rol = st.radio("Ingresar como:", ["Vendedor","Gerencia"])
-
-archivo = cargar_desde_url(EXCEL_URL)
+# ── Carga automática de ambos archivos ───────────────────────────────────────
+archivo        = cargar_desde_url(EXCEL_URL)
+archivo_coords = cargar_desde_url(COORDS_URL)
 
 if archivo is None:
     st.title("📊 Reporte General de Ventas")
-    st.error("⚠️ No se pudo cargar el archivo de ventas. Verificá que el archivo esté subido al repositorio con el nombre **ventas 2025-2026.xlsx**")
+    st.error("⚠️ No se pudo cargar el archivo de ventas desde Google Drive.")
     st.stop()
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 📊 Reporte General de Ventas")
+    rol = st.radio("Ingresar como:", ["Vendedor","Gerencia"])
 
 df_ventas, df_base = cargar_datos(archivo)
 hoy = df_ventas["fecha"].max()
