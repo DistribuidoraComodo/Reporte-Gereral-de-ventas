@@ -38,9 +38,26 @@ def cargar_datos(archivo):
     df_v = df_v.iloc[:, :len(nombres_v)]
     df_v.columns = nombres_v
     df_v["fecha"] = pd.to_datetime(df_v["fecha"], errors="coerce")
-    df_v = df_v.dropna(subset=["fecha","facturacion"])
+    # Solo descartar filas sin facturación — las sin fecha las recuperamos del periodo
+    df_v = df_v.dropna(subset=["facturacion"])
     df_v["año"] = df_v["fecha"].dt.year
     df_v["mes"] = df_v["fecha"].dt.month
+    # Recuperar año/mes desde la columna "periodo" cuando la fecha es inválida
+    # Formatos esperados: "01-2025", "01/2025", "2025-01", "2025/01", o fecha Excel
+    sin_fecha = df_v["año"].isna()
+    if sin_fecha.any():
+        periodo_parsed = pd.to_datetime(df_v.loc[sin_fecha, "periodo"], errors="coerce", dayfirst=True)
+        # Si no pudo, intentar como "mm-yyyy" o "mm/yyyy"
+        mask_str = sin_fecha & periodo_parsed.isna()
+        if mask_str.any():
+            periodo_parsed2 = df_v.loc[mask_str, "periodo"].astype(str).str.extract(r'(\d{1,2})[-/](\d{4})')
+            if not periodo_parsed2.empty and periodo_parsed2.notna().all(axis=1).any():
+                df_v.loc[mask_str, "mes"] = pd.to_numeric(periodo_parsed2[0], errors="coerce")
+                df_v.loc[mask_str, "año"] = pd.to_numeric(periodo_parsed2[1], errors="coerce")
+        df_v.loc[sin_fecha & periodo_parsed.notna(), "año"] = periodo_parsed[periodo_parsed.notna()].dt.year.values
+        df_v.loc[sin_fecha & periodo_parsed.notna(), "mes"] = periodo_parsed[periodo_parsed.notna()].dt.month.values
+    # Descartar solo si no se pudo obtener ni fecha ni periodo
+    df_v = df_v.dropna(subset=["año","mes"])
     df_v["cod_vendedor"] = pd.to_numeric(df_v["cod_vendedor"], errors="coerce")
     df_v["cod_cliente"] = pd.to_numeric(df_v["cod_cliente"], errors="coerce")
 
