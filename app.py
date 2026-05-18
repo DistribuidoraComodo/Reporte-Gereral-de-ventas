@@ -1173,15 +1173,24 @@ elif rol == "Gerencia":
         st.markdown("**Filtrar vendedores:**")
         sel_vend = st.multiselect("Vendedores:", options=todos_vend, default=[], placeholder="Todos")
 
-    # Filtrar base y ventas (usando la base ya filtrada por clasificación)
+    # Filtrar base (para conteos de clientes y datos de la base)
     if sel_vend:
         cods_sel = vdf_g[vdf_g["vendedor_asignado"].isin(sel_vend)]["cod_vendedor"].tolist()
         base_g   = df_base_filtrada[df_base_filtrada["cod_vendedor"].isin(cods_sel)].copy()
     else:
         base_g = df_base_filtrada[df_base_filtrada["cod_vendedor"].isin(vdf_g["cod_vendedor"])].copy()
 
-    clientes_g = base_g["cod_cliente"].unique()
-    ventas_g   = df_ventas_filtrada[df_ventas_filtrada["cod_cliente"].isin(clientes_g)].copy()
+    # Ventas: usar df_ventas completo (igual que Excel) para que los totales coincidan
+    # Si hay filtro de vendedor, filtramos por cod_vendedor en la hoja de ventas
+    if sel_vend:
+        cods_sel_v = [str(int(c)) for c in cods_sel if pd.notna(c)]
+        ventas_g = df_ventas[
+            df_ventas["cod_vendedor"].apply(
+                lambda x: str(int(x)) if pd.notna(x) else ""
+            ).isin(cods_sel_v)
+        ].copy()
+    else:
+        ventas_g = df_ventas.copy()
 
     año_act, mes_act = hoy.year, hoy.month
     mes_ant     = mes_act - 1 if mes_act > 1 else 12
@@ -1198,11 +1207,25 @@ elif rol == "Gerencia":
     var_mes      = (fact_mes - fact_mes_ant) / fact_mes_ant * 100 if fact_mes_ant else 0
     fact_año     = ventas_g[ventas_g["año"]==año_act]["facturacion"].sum()
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("💰 Facturación del mes",    fmt_peso(fact_mes), f"{var_mes:+.1f}% vs mes ant.")
-    c2.metric("📅 Facturación año actual", fmt_peso(fact_año))
-    c3.metric("🏢 Clientes en base",       len(base_g))
-    c4.metric("👥 Vendedores",             len(base_g["cod_vendedor"].dropna().unique()))
+    # Cobertura de cartera: % de clientes de la base que compraron en el mes actual
+    compraron_mes = set(
+        ventas_g[(ventas_g["año"]==año_act) & (ventas_g["mes"]==mes_act)]["cod_cliente"].dropna().unique()
+    )
+    total_base_g      = len(base_g)
+    compraron_en_base = len(set(base_g["cod_cliente"].dropna().unique()) & compraron_mes)
+    pct_cobertura     = compraron_en_base / total_base_g * 100 if total_base_g else 0
+    nombre_mes_g      = MESES_FULL.get(mes_act, "")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric(f"💰 Facturación {nombre_mes_g} {año_act}", fmt_peso(fact_mes), f"{var_mes:+.1f}% vs {MESES_FULL.get(mes_ant,'')}")
+    c2.metric("📅 Facturación año actual",  fmt_peso(fact_año))
+    c3.metric("🏢 Clientes en base",        total_base_g)
+    c4.metric("👥 Vendedores",              len(base_g["cod_vendedor"].dropna().unique()))
+    c5.metric(
+        f"📦 Cobertura {nombre_mes_g}",
+        f"{pct_cobertura:.1f}%",
+        f"{compraron_en_base} de {total_base_g} clientes compraron"
+    )
 
     st.divider()
 
