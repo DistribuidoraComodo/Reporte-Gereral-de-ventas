@@ -457,28 +457,55 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
         st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
         return
 
-    # Buscar en base de clientes
+    # Buscar en base Y en ventas — cualquier campo de nombre o código
     busqueda_lower = busqueda.strip().lower()
     cols_base = ["cod_cliente", "razon_social", "vendedor_asignado"]
+    if "nombre_fantasia" in base_df.columns:
+        cols_base.append("nombre_fantasia")
     if "fecha_alta" in base_df.columns:
         cols_base.append("fecha_alta")
-    mask = (
-        base_df["razon_social"].str.lower().str.contains(busqueda_lower, na=False) |
-        base_df["cod_cliente"].astype(str).str.contains(busqueda_lower, na=False)
+
+    mask = base_df["cod_cliente"].astype(str).str.contains(busqueda_lower, na=False)
+    for col in ["razon_social", "nombre_fantasia"]:
+        if col in base_df.columns:
+            mask |= base_df[col].fillna("").str.lower().str.contains(busqueda_lower, na=False)
+
+    candidatos = base_df[mask][cols_base].drop_duplicates("cod_cliente").copy()
+
+    # Buscar también en la hoja de ventas (captura clientes sin base o con nombre diferente)
+    mask_v = (
+        ventas_df["cliente"].fillna("").str.lower().str.contains(busqueda_lower, na=False) |
+        ventas_df["cod_cliente"].astype(str).str.contains(busqueda_lower, na=False)
     )
-    candidatos = base_df[mask][cols_base].drop_duplicates("cod_cliente")
+    cods_en_ventas = ventas_df[mask_v]["cod_cliente"].dropna().unique()
+    cods_ya = set(candidatos["cod_cliente"].tolist())
+    for cod in cods_en_ventas:
+        if cod not in cods_ya:
+            nombre_v = ventas_df[ventas_df["cod_cliente"] == cod]["cliente"].dropna()
+            nombre_v = nombre_v.iloc[0] if not nombre_v.empty else str(cod)
+            extra_row = {"cod_cliente": cod, "razon_social": nombre_v, "vendedor_asignado": "-"}
+            candidatos = pd.concat([candidatos, pd.DataFrame([extra_row])], ignore_index=True)
 
     if candidatos.empty:
         st.warning(f"No se encontró ningún cliente con '{busqueda}'.")
         return
 
-    if len(candidatos) > 1:
-        opciones = candidatos["razon_social"].tolist()
-        sel_nombre = st.selectbox("Seleccioná el cliente:", opciones, key=f"{key_prefix}_sel_cli")
-        cod_cli = candidatos[candidatos["razon_social"] == sel_nombre]["cod_cliente"].iloc[0]
-    else:
-        cod_cli = candidatos["cod_cliente"].iloc[0]
-        sel_nombre = candidatos["razon_social"].iloc[0]
+    # Nombre a mostrar: razon_social → nombre_fantasia → cod_cliente
+    def _nombre(row):
+        for col in ["razon_social", "nombre_fantasia"]:
+            v = row.get(col, "") or ""
+            if str(v).strip() and str(v).strip().lower() not in ("nan", "none"):
+                return str(v).strip()
+        return f"(cód. {int(row['cod_cliente'])})"
+
+    candidatos["_display"] = candidatos.apply(_nombre, axis=1)
+    candidatos = candidatos.sort_values("_display").reset_index(drop=True)
+
+    # Siempre mostrar selector con TODOS los resultados encontrados
+    st.caption(f"Se encontraron **{len(candidatos)}** cliente(s) con '{busqueda}'")
+    opciones = candidatos["_display"].tolist()
+    sel_nombre = st.selectbox("Seleccioná el cliente:", opciones, key=f"{key_prefix}_sel_cli")
+    cod_cli = candidatos[candidatos["_display"] == sel_nombre]["cod_cliente"].iloc[0]
 
     # Ventas del cliente en el período seleccionado
     ventas_cli = ventas_df[
@@ -606,14 +633,26 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
     fig2.update_layout(xaxis_tickformat="%b %Y", hovermode="x unified")
     st.plotly_chart(fig2, use_container_width=True)
 
-    # ── Top 10 artículos más comprados (en unidades) ──
+    # ── Top 10 artículos más comprados ──
     st.markdown("---")
-    st.markdown("#### 📦 Top 10 artículos más comprados (en unidades)")
+    st.markdown("#### 📦 Top 10 artículos más comprados")
     st.caption("Los filtros de marca, familia, rubro y subrubro aplican a este listado.")
 
-    busq_top10 = st.text_input("Buscar artículo en el top 10:", placeholder="Nombre o código...",
-                                key=f"{key_prefix}_top10_busq")
+    top10_col1, top10_col2, top10_col3 = st.columns([2, 2, 1])
+    with top10_col1:
+        busq_top10 = st.text_input("Buscar artículo:", placeholder="Nombre o código...",
+                                    key=f"{key_prefix}_top10_busq")
+    with top10_col2:
+        marcas_disp = sorted(ventas_filt["marca"].dropna().unique().tolist())
+        marcas_top10 = st.multiselect("Filtrar por marca:", options=marcas_disp,
+                                       key=f"{key_prefix}_top10_marca")
+    with top10_col3:
+        criterio_top10 = st.radio("Ordenar por:", ["Unidades", "Facturación"],
+                                   key=f"{key_prefix}_top10_criterio", horizontal=False)
+
     ventas_top10 = ventas_filt.copy()
+    if marcas_top10:
+        ventas_top10 = ventas_top10[ventas_top10["marca"].isin(marcas_top10)]
     if busq_top10:
         bl = busq_top10.strip().lower()
         ventas_top10 = ventas_top10[
@@ -621,11 +660,12 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
             ventas_top10["cod_articulo"].astype(str).str.lower().str.contains(bl, na=False)
         ]
 
+    col_orden = "cantidad" if criterio_top10 == "Unidades" else "facturacion"
     top10_art = (
         ventas_top10.groupby(["cod_articulo","descripcion"])
         .agg(cantidad=("cantidad","sum"), facturacion=("facturacion","sum"))
         .reset_index()
-        .sort_values("cantidad", ascending=False)
+        .sort_values(col_orden, ascending=False)
         .head(10)
     )
     if not top10_art.empty:
