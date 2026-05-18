@@ -851,12 +851,29 @@ if rol == "Vendedor":
     # Esto asegura que coincida con el total real del vendedor
     ventas_v  = df_ventas_filtrada[df_ventas_filtrada["cod_vendedor"] == cod_sel].copy()
 
-    # Agregar a la base los clientes que tienen ventas asignadas a este vendedor
-    # pero no están en la base (cambios de vendedor, clientes no dados de alta, etc.)
+    # Clientes con ventas asignadas a este vendedor pero no en su base actual
     cods_en_ventas = set(ventas_v["cod_cliente"].dropna().unique())
     cods_en_base   = set(base_v["cod_cliente"].dropna().unique())
     cods_extra     = cods_en_ventas - cods_en_base
+
+    # Clasificar los clientes extra: reasignados (están en la base de otro) vs sin base
+    reasignados_info = []
+    sin_base_info    = []
     if cods_extra:
+        for cod in cods_extra:
+            fila_base = df_base[df_base["cod_cliente"] == cod]
+            ventas_cod = ventas_v[ventas_v["cod_cliente"] == cod]
+            nombre_cli = ventas_cod["cliente"].iloc[0] if not ventas_cod.empty else str(cod)
+            fact_hist  = ventas_cod["facturacion"].sum()
+            if not fila_base.empty:
+                vend_actual = fila_base["vendedor_asignado"].iloc[0]
+                reasignados_info.append({"cod_cliente": cod, "razon_social": nombre_cli,
+                                         "vendedor_actual": vend_actual, "facturacion": fact_hist})
+            else:
+                sin_base_info.append({"cod_cliente": cod, "razon_social": nombre_cli,
+                                      "vendedor_actual": "Sin registro en base", "facturacion": fact_hist})
+
+        # Igual los agregamos a base_v para que aparezcan en el resumen
         extra_cli = (
             ventas_v[ventas_v["cod_cliente"].isin(cods_extra)]
             [["cod_cliente","cliente","localidad","provincia"]]
@@ -871,6 +888,20 @@ if rol == "Vendedor":
 
     st.title(f"Hola, {nombre_limpio} 👋")
     st.caption(f"Datos al {hoy.strftime('%d/%m/%Y')}")
+
+    # ── Indicador de clientes reasignados / sin base ──────────────────────────
+    if reasignados_info or sin_base_info:
+        total_extra     = len(reasignados_info) + len(sin_base_info)
+        fact_extra      = sum(r["facturacion"] for r in reasignados_info + sin_base_info)
+        with st.expander(
+            f"⚠️ {total_extra} cliente{'s' if total_extra>1 else ''} con ventas históricas ya no están en tu cartera actual "
+            f"— Facturación asociada: {fmt_peso(fact_extra)}"
+        ):
+            st.caption("Estos clientes tuvieron ventas registradas a tu nombre pero actualmente están asignados a otro vendedor o no tienen registro en la base.")
+            df_extra = pd.DataFrame(reasignados_info + sin_base_info)
+            df_extra["facturacion"] = df_extra["facturacion"].apply(fmt_peso)
+            df_extra.columns = ["Cód. cliente","Cliente","Vendedor actual en base","Facturación histórica"]
+            st.dataframe(df_extra, use_container_width=True, hide_index=True)
 
     # KPIs
     mes_act, año_act = hoy.month, hoy.year
