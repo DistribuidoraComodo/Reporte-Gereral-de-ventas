@@ -435,35 +435,45 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
     fecha_max = ventas_df["fecha"].max().date()
     default_desde = max(fecha_min, (pd.Timestamp(fecha_max) - pd.DateOffset(months=12)).date())
 
-    st.markdown("#### Buscar cliente")
-    col_b, col_d1, col_d2 = st.columns([2, 1, 1])
-    with col_b:
-        busqueda = st.text_input("Nombre o código de cliente:", placeholder="Ej: GARCIA o 7088",
-                                 key=f"{key_prefix}_busq_cli")
+    # ── Fechas ────────────────────────────────────────────────────────────────
+    col_d1, col_d2 = st.columns(2)
     with col_d1:
         desde_mix = st.date_input("Desde", value=default_desde, min_value=fecha_min, max_value=fecha_max,
                                   key=f"{key_prefix}_mix_desde")
     with col_d2:
         hasta_mix = st.date_input("Hasta", value=fecha_max, min_value=fecha_min, max_value=fecha_max,
                                   key=f"{key_prefix}_mix_hasta")
-
-    st.caption(f"✅ Período seleccionado: **{desde_mix.strftime('%d/%m/%Y')} → {hasta_mix.strftime('%d/%m/%Y')}**")
-
-    if not busqueda:
-        st.info("Ingresá el nombre o código del cliente para ver su análisis.")
-        return
+    st.caption(f"✅ Período: **{desde_mix.strftime('%d/%m/%Y')} → {hasta_mix.strftime('%d/%m/%Y')}**")
 
     if desde_mix > hasta_mix:
         st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
         return
 
-    # Buscar en base Y en ventas — cualquier campo de nombre o código
+    # ── Buscador con botón limpiar ────────────────────────────────────────────
+    st.markdown("#### 🔍 Buscar cliente")
+    key_busq = f"{key_prefix}_busq_cli"
+    if key_busq not in st.session_state:
+        st.session_state[key_busq] = ""
+
+    col_inp, col_btn = st.columns([5, 1])
+    with col_inp:
+        busqueda = st.text_input("Nombre o código:", placeholder="Ej: GARCIA o 7088",
+                                 key=key_busq, label_visibility="collapsed")
+    with col_btn:
+        if st.button("🗑️ Limpiar", key=f"{key_prefix}_limpiar", use_container_width=True):
+            st.session_state[key_busq] = ""
+            st.rerun()
+
+    if not busqueda or not busqueda.strip():
+        st.info("Ingresá el nombre o código del cliente para ver su análisis.")
+        return
+
+    # ── Búsqueda en base y ventas ─────────────────────────────────────────────
     busqueda_lower = busqueda.strip().lower()
     cols_base = ["cod_cliente", "razon_social", "vendedor_asignado"]
-    if "nombre_fantasia" in base_df.columns:
-        cols_base.append("nombre_fantasia")
-    if "fecha_alta" in base_df.columns:
-        cols_base.append("fecha_alta")
+    for col in ["nombre_fantasia", "fecha_alta"]:
+        if col in base_df.columns:
+            cols_base.append(col)
 
     mask = base_df["cod_cliente"].astype(str).str.contains(busqueda_lower, na=False)
     for col in ["razon_social", "nombre_fantasia"]:
@@ -472,7 +482,7 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
 
     candidatos = base_df[mask][cols_base].drop_duplicates("cod_cliente").copy()
 
-    # Buscar también en la hoja de ventas (captura clientes sin base o con nombre diferente)
+    # También buscar en la hoja de ventas
     mask_v = (
         ventas_df["cliente"].fillna("").str.lower().str.contains(busqueda_lower, na=False) |
         ventas_df["cod_cliente"].astype(str).str.contains(busqueda_lower, na=False)
@@ -493,19 +503,26 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
     # Nombre a mostrar: razon_social → nombre_fantasia → cod_cliente
     def _nombre(row):
         for col in ["razon_social", "nombre_fantasia"]:
-            v = row.get(col, "") or ""
-            if str(v).strip() and str(v).strip().lower() not in ("nan", "none"):
-                return str(v).strip()
+            v = str(row.get(col, "") or "").strip()
+            if v and v.lower() not in ("nan", "none", ""):
+                return v
         return f"(cód. {int(row['cod_cliente'])})"
 
     candidatos["_display"] = candidatos.apply(_nombre, axis=1)
     candidatos = candidatos.sort_values("_display").reset_index(drop=True)
 
-    # Siempre mostrar selector con TODOS los resultados encontrados
-    st.caption(f"Se encontraron **{len(candidatos)}** cliente(s) con '{busqueda}'")
-    opciones = candidatos["_display"].tolist()
-    sel_nombre = st.selectbox("Seleccioná el cliente:", opciones, key=f"{key_prefix}_sel_cli")
-    cod_cli = candidatos[candidatos["_display"] == sel_nombre]["cod_cliente"].iloc[0]
+    st.caption(f"Se encontraron **{len(candidatos)}** cliente(s)")
+
+    # Selectbox por índice — evita bugs cuando hay nombres repetidos
+    # La key cambia con la búsqueda para resetear la selección al buscar algo nuevo
+    sel_idx = st.selectbox(
+        "Seleccioná el cliente:",
+        options=list(range(len(candidatos))),
+        format_func=lambda i: candidatos.iloc[i]["_display"],
+        key=f"{key_prefix}_sel_cli_{busqueda_lower[:20]}"
+    )
+    cod_cli   = candidatos.iloc[sel_idx]["cod_cliente"]
+    sel_nombre = candidatos.iloc[sel_idx]["_display"]
 
     # Ventas del cliente en el período seleccionado
     ventas_cli = ventas_df[
