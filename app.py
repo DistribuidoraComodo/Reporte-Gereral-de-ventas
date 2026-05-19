@@ -228,6 +228,62 @@ def fmt_compacto(v):
         return f"${v/1_000:.0f}K"
     return fmt_peso(v)
 
+def resumen_clasificacion(base_df, ventas_df, resumen_df=None):
+    """
+    Muestra un resumen de clientes agrupado por Clasificación y Subclasificación.
+    base_df: base de clientes del vendedor/gerencia
+    ventas_df: ventas para calcular facturación por clasificación
+    resumen_df: resumen de estados (opcional, para mostrar activos/inactivos)
+    """
+    cols_clasif = ["cod_cliente","clasificacion","subclasificacion"]
+    clasif = base_df[[c for c in cols_clasif if c in base_df.columns]].drop_duplicates("cod_cliente").copy()
+    if "clasificacion" not in clasif.columns:
+        st.info("No hay datos de clasificación en la base de clientes.")
+        return
+
+    clasif["clasificacion"]    = clasif["clasificacion"].fillna("Sin clasificación")
+    clasif["subclasificacion"] = clasif.get("subclasificacion", pd.Series(dtype=str)).fillna("Sin subclasificación") if "subclasificacion" in clasif.columns else "—"
+
+    # Facturación por clasificación cruzando con ventas
+    ventas_c = ventas_df.merge(clasif, on="cod_cliente", how="left")
+    ventas_c["clasificacion"]    = ventas_c["clasificacion"].fillna("Sin clasificación")
+    ventas_c["subclasificacion"] = ventas_c["subclasificacion"].fillna("Sin subclasificación") if "subclasificacion" in ventas_c.columns else "—"
+
+    grp_cols = ["clasificacion","subclasificacion"] if "subclasificacion" in clasif.columns else ["clasificacion"]
+
+    # Clientes en base por clasificación
+    cnt = clasif.groupby(grp_cols)["cod_cliente"].nunique().reset_index(name="clientes")
+
+    # Facturación
+    fact = ventas_c.groupby(grp_cols)["facturacion"].sum().reset_index(name="facturacion")
+    tbl = cnt.merge(fact, on=grp_cols, how="left").fillna(0)
+
+    # Activos/Inactivos si tenemos resumen
+    if resumen_df is not None:
+        res_c = resumen_df.merge(clasif, on="cod_cliente", how="left")
+        res_c["clasificacion"]    = res_c["clasificacion"].fillna("Sin clasificación")
+        res_c["subclasificacion"] = res_c["subclasificacion"].fillna("Sin subclasificación") if "subclasificacion" in res_c.columns else "—"
+        estados = res_c.groupby(grp_cols).apply(
+            lambda x: pd.Series({
+                "activos":     (x["estado"]=="ACTIVO").sum(),
+                "inactivos":   (x["estado"]=="INACTIVO").sum(),
+                "sin_compras": (x["estado"]=="SIN COMPRAS").sum(),
+            })
+        ).reset_index()
+        tbl = tbl.merge(estados, on=grp_cols, how="left").fillna(0)
+        tbl[["activos","inactivos","sin_compras"]] = tbl[["activos","inactivos","sin_compras"]].astype(int)
+
+    tbl = tbl.sort_values(grp_cols)
+    tbl["facturacion"] = tbl["facturacion"].apply(fmt_peso)
+    tbl["clientes"]    = tbl["clientes"].astype(int)
+
+    rename = {"clasificacion":"Clasificación","subclasificacion":"Subclasificación",
+               "clientes":"Clientes","facturacion":"Facturación año",
+               "activos":"✅ Activos","inactivos":"⚠️ Inactivos","sin_compras":"❌ Sin compras"}
+    tbl = tbl.rename(columns=rename)
+    st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+
 def tabla_mensual(df_f):
     pivot = (
         df_f.groupby(["año","mes"])["facturacion"]
@@ -773,17 +829,15 @@ def mapa_clientes(resumen, df_coords, color_por="estado", add_vendedor_col=None,
     if add_vendedor_col and add_vendedor_col in merged.columns:
         merged["hover_txt"] += "<br>Vendedor: " + merged[add_vendedor_col].fillna("-")
 
+    # Los marcadores SIEMPRE en color (para contrastar bien en cualquier fondo)
     if color_por == "estado":
-        if byn:
-            color_map = {"ACTIVO": "#000000", "INACTIVO": "#888888", "SIN COMPRAS": "#cccccc"}
-        else:
-            color_map = {"ACTIVO": "#28a745", "INACTIVO": "#e74c3c", "SIN COMPRAS": "#888888"}
+        color_map = {"ACTIVO": "#28a745", "INACTIVO": "#e74c3c", "SIN COMPRAS": "#888888"}
         kwargs = dict(color="estado", color_discrete_map=color_map)
     else:
         kwargs = dict(color=add_vendedor_col or "vendedor",
-                      color_discrete_sequence=px.colors.qualitative.Set2 if not byn
-                      else ["#000","#555","#999","#333","#777","#aaa","#222","#666"])
+                      color_discrete_sequence=px.colors.qualitative.Set2)
 
+    # El fondo del mapa sí cambia: B&W = fondo gris limpio, normal = callejero
     map_style = "carto-positron" if byn else "open-street-map"
 
     fig = px.scatter_map(
@@ -922,6 +976,7 @@ if rol == "Vendedor":
     cod_sel   = vdf[vdf["vendedor_asignado"] == vendedor_sel]["cod_vendedor"].iloc[0]
     # Clientes asignados en la base (ya filtrada por clasificación)
     base_v    = df_base_filtrada[df_base_filtrada["cod_vendedor"] == cod_sel].copy()
+    total_cli_base = base_v["cod_cliente"].dropna().nunique()  # Contador puro de la base
 
     # Ventas filtradas por cod_vendedor directamente desde la hoja Ventas completa
     # (igual que una tabla dinámica de Excel — incluye clientes que no están en la base)
@@ -1008,7 +1063,7 @@ if rol == "Vendedor":
     nombre_mes_act = MESES_FULL.get(mes_act, "")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric(f"💰 Facturación {nombre_mes_act} {año_act}", fmt_peso(fact_mes), f"{var_mes:+.1f}% vs {MESES_FULL.get(mes_ant, '')}")
-    c2.metric("🏢 Clientes asignados",      total_cli)
+    c2.metric("🏢 Clientes asignados",      total_cli_base)
     c3.metric("✅ Activos",                 activos)
     c4.metric("⚠️ Inactivos",              inactivos)
     c5.metric("❌ Sin compras",            sin_compras)
@@ -1050,6 +1105,10 @@ if rol == "Vendedor":
                         "Fact. 3 meses","Tendencia","Fact. año","Marcas","Localidad"]
         st.dataframe(df_d, use_container_width=True, hide_index=True)
 
+        st.markdown("---")
+        with st.expander("📊 Resumen por clasificación y subclasificación"):
+            resumen_clasificacion(base_v, ventas_v, resumen)
+
     with tab_inact:
         st.markdown("#### ¿Qué período querés analizar?")
         fecha_min = df_ventas["fecha"].min().date()
@@ -1081,7 +1140,7 @@ if rol == "Vendedor":
         st.markdown(f"**Clientes sin compras entre {desde.strftime('%d/%m/%Y')} y {hasta.strftime('%d/%m/%Y')}:**")
 
         col_a, col_b, col_c = st.columns(3)
-        col_a.metric("Total clientes asignados", total_cli)
+        col_a.metric("Total clientes asignados", total_cli_base)
         col_b.metric("Compraron en el período", len(compraron_en_rango))
         col_c.metric("❌ No compraron en el período", len(inact_periodo))
 
@@ -1346,6 +1405,10 @@ elif rol == "Gerencia":
             tbl["facturacion"] = tbl["facturacion"].apply(fmt_peso)
             tbl.columns = ["#", "Vendedor", f"Fact. {año_act}"]
             st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        with st.expander("📊 Resumen por clasificación y subclasificación"):
+            resumen_clasificacion(base_g, ventas_g)
 
     with t_mens:
         # Filtro por vendedor dentro del panel mensual
