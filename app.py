@@ -802,45 +802,30 @@ def mapa_clientes(resumen, df_coords, color_por="estado", add_vendedor_col=None,
 
 
 # ── Carga automática del Excel desde GitHub ───────────────────────────────────
-GDRIVE_FILE_ID    = "1w2I5XaswfouEzS7qZXnPde7smNTmP1--"
-GDRIVE_COORDS_ID  = "1neUDqvhShoVxtLva7YHHhWY6ocpkUKJw"
-EXCEL_URL  = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}"
-COORDS_URL = f"https://drive.google.com/uc?export=download&id={GDRIVE_COORDS_ID}"
+GDRIVE_FILE_ID   = "1w2I5XaswfouEzS7qZXnPde7smNTmP1--"
+GDRIVE_COORDS_ID = "1neUDqvhShoVxtLva7YHHhWY6ocpkUKJw"
 
 @st.cache_data(show_spinner="Cargando archivo de ventas...")
-def cargar_desde_url(url):
-    """Descarga un archivo desde Google Drive y devuelve los bytes crudos."""
-    import requests, re
-    TIMEOUT = 60  # segundos máximo de espera
+def cargar_desde_url(file_id):
+    """Descarga un archivo desde Google Drive usando gdown y devuelve los bytes crudos."""
     try:
-        session = requests.Session()
-        r = session.get(url, allow_redirects=True, timeout=TIMEOUT)
-        if r.status_code != 200:
+        import gdown, io, tempfile, os
+        url = f"https://drive.google.com/uc?id={file_id}"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp_path = tmp.name
+        gdown.download(url, tmp_path, quiet=True, fuzzy=True)
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+        os.unlink(tmp_path)
+        if len(data) < 1000:
             return None
-        # Google Drive muestra advertencia de "virus scan" para archivos grandes
-        content_type = r.headers.get("Content-Type", "")
-        if "text/html" in content_type:
-            token_match = re.search(r'confirm=([0-9A-Za-z_\-]+)', r.text)
-            if token_match:
-                r = session.get(url + "&confirm=" + token_match.group(1),
-                                allow_redirects=True, timeout=TIMEOUT)
-            else:
-                uuid_match = re.search(r'uuid=([0-9A-Za-z_\-]+)', r.text)
-                if uuid_match:
-                    file_id = re.search(r'id=([^&]+)', url)
-                    file_id = file_id.group(1) if file_id else ""
-                    confirm_url = (f"https://drive.usercontent.google.com/download"
-                                   f"?id={file_id}&export=download&confirm=t&uuid={uuid_match.group(1)}")
-                    r = session.get(confirm_url, allow_redirects=True, timeout=TIMEOUT)
-        if r.status_code != 200 or len(r.content) < 1000:
-            return None
-        return r.content
+        return data
     except Exception:
         return None
 
 # ── Carga automática de ambos archivos ───────────────────────────────────────
-archivo        = cargar_desde_url(EXCEL_URL)
-archivo_coords = cargar_desde_url(COORDS_URL)
+archivo        = cargar_desde_url(GDRIVE_FILE_ID)
+archivo_coords = cargar_desde_url(GDRIVE_COORDS_ID)
 
 if archivo is None:
     st.title("📊 Reporte General de Ventas")
