@@ -811,26 +811,32 @@ COORDS_URL = f"https://drive.google.com/uc?export=download&id={GDRIVE_COORDS_ID}
 def cargar_desde_url(url):
     """Descarga un archivo desde Google Drive y devuelve los bytes crudos."""
     import requests, re
-    session = requests.Session()
-    r = session.get(url, allow_redirects=True)
-    if r.status_code != 200:
+    TIMEOUT = 60  # segundos máximo de espera
+    try:
+        session = requests.Session()
+        r = session.get(url, allow_redirects=True, timeout=TIMEOUT)
+        if r.status_code != 200:
+            return None
+        # Google Drive muestra advertencia de "virus scan" para archivos grandes
+        content_type = r.headers.get("Content-Type", "")
+        if "text/html" in content_type:
+            token_match = re.search(r'confirm=([0-9A-Za-z_\-]+)', r.text)
+            if token_match:
+                r = session.get(url + "&confirm=" + token_match.group(1),
+                                allow_redirects=True, timeout=TIMEOUT)
+            else:
+                uuid_match = re.search(r'uuid=([0-9A-Za-z_\-]+)', r.text)
+                if uuid_match:
+                    file_id = re.search(r'id=([^&]+)', url)
+                    file_id = file_id.group(1) if file_id else ""
+                    confirm_url = (f"https://drive.usercontent.google.com/download"
+                                   f"?id={file_id}&export=download&confirm=t&uuid={uuid_match.group(1)}")
+                    r = session.get(confirm_url, allow_redirects=True, timeout=TIMEOUT)
+        if r.status_code != 200 or len(r.content) < 1000:
+            return None
+        return r.content
+    except Exception:
         return None
-    # Google Drive muestra advertencia de "virus scan" para archivos grandes
-    content_type = r.headers.get("Content-Type", "")
-    if "text/html" in content_type:
-        token_match = re.search(r'confirm=([0-9A-Za-z_\-]+)', r.text)
-        if token_match:
-            r = session.get(url + "&confirm=" + token_match.group(1), allow_redirects=True)
-        else:
-            uuid_match = re.search(r'uuid=([0-9A-Za-z_\-]+)', r.text)
-            if uuid_match:
-                file_id = re.search(r'id=([^&]+)', url)
-                file_id = file_id.group(1) if file_id else ""
-                confirm_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t&uuid={uuid_match.group(1)}"
-                r = session.get(confirm_url, allow_redirects=True)
-    if r.status_code != 200 or len(r.content) < 1000:
-        return None
-    return r.content  # Devuelve bytes, no BytesIO
 
 # ── Carga automática de ambos archivos ───────────────────────────────────────
 archivo        = cargar_desde_url(EXCEL_URL)
@@ -839,6 +845,10 @@ archivo_coords = cargar_desde_url(COORDS_URL)
 if archivo is None:
     st.title("📊 Reporte General de Ventas")
     st.error("⚠️ No se pudo cargar el archivo de ventas desde Google Drive.")
+    st.info("Intentá recargar la página. Si el problema persiste, el archivo en Google Drive puede no estar compartido correctamente.")
+    if st.button("🔄 Reintentar"):
+        st.cache_data.clear()
+        st.rerun()
     st.stop()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -1274,20 +1284,22 @@ elif rol == "Gerencia":
     compraron_mes = set(
         ventas_g[(ventas_g["año"]==año_act) & (ventas_g["mes"]==mes_act)]["cod_cliente"].dropna().unique()
     )
-    total_base_g      = len(base_g)
-    compraron_en_base = len(set(base_g["cod_cliente"].dropna().unique()) & compraron_mes)
-    pct_cobertura     = compraron_en_base / total_base_g * 100 if total_base_g else 0
+    # Clientes en base: siempre desde df_base original (no filtrado por ventas)
+    total_en_base     = df_base["cod_cliente"].dropna().nunique()
+    cods_base_g       = set(base_g["cod_cliente"].dropna().unique())
+    compraron_en_base = len(cods_base_g & compraron_mes)
+    pct_cobertura     = compraron_en_base / total_en_base * 100 if total_en_base else 0
     nombre_mes_g      = MESES_FULL.get(mes_act, "")
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric(f"💰 Facturación {nombre_mes_g} {año_act}", fmt_peso(fact_mes), f"{var_mes:+.1f}% vs {MESES_FULL.get(mes_ant,'')}")
     c2.metric("📅 Facturación año actual",  fmt_peso(fact_año))
-    c3.metric("🏢 Clientes en base",        total_base_g)
+    c3.metric("🏢 Clientes en base",        total_en_base)
     c4.metric("👥 Vendedores",              len(base_g["cod_vendedor"].dropna().unique()))
     c5.metric(
         f"📦 Cobertura {nombre_mes_g}",
         f"{pct_cobertura:.1f}%",
-        f"{compraron_en_base} de {total_base_g} clientes compraron"
+        f"{compraron_en_base} de {total_en_base} clientes compraron"
     )
 
     st.divider()
