@@ -807,30 +807,48 @@ GDRIVE_COORDS_ID = "1neUDqvhShoVxtLva7YHHhWY6ocpkUKJw"
 
 @st.cache_data(show_spinner="Cargando archivo de ventas...")
 def cargar_desde_url(file_id):
-    """Descarga un archivo desde Google Drive usando gdown y devuelve los bytes crudos."""
-    try:
-        import gdown, io, tempfile, os
-        url = f"https://drive.google.com/uc?id={file_id}"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp_path = tmp.name
-        gdown.download(url, tmp_path, quiet=True, fuzzy=True)
-        with open(tmp_path, "rb") as f:
-            data = f.read()
-        os.unlink(tmp_path)
-        if len(data) < 1000:
-            return None
-        return data
-    except Exception:
-        return None
+    """Descarga un archivo desde Google Drive y devuelve los bytes crudos."""
+    import requests, re
+    errores = []
+    urls_a_intentar = [
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t",
+        f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
+        f"https://drive.google.com/uc?export=download&id={file_id}",
+    ]
+    for url in urls_a_intentar:
+        try:
+            r = requests.get(url, allow_redirects=True, timeout=90)
+            content_type = r.headers.get("Content-Type", "")
+            # Si devuelve HTML, intentar extraer token de confirmación
+            if "text/html" in content_type and r.status_code == 200:
+                for pattern in [r'confirm=([0-9A-Za-z_\-]+)', r'"([0-9A-Za-z_\-]{6,})"']:
+                    m = re.search(pattern, r.text)
+                    if m and len(m.group(1)) > 3:
+                        r2 = requests.get(
+                            f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t&uuid={m.group(1)}",
+                            allow_redirects=True, timeout=90
+                        )
+                        if r2.status_code == 200 and len(r2.content) > 1000:
+                            return r2.content
+            if r.status_code == 200 and len(r.content) > 1000 and b"html" not in r.content[:100].lower():
+                return r.content
+            errores.append(f"{url[:60]}: status={r.status_code} size={len(r.content)}")
+        except Exception as e:
+            errores.append(f"{url[:60]}: {e}")
+    return errores  # Devolver lista de errores para mostrar al usuario
 
 # ── Carga automática de ambos archivos ───────────────────────────────────────
 archivo        = cargar_desde_url(GDRIVE_FILE_ID)
 archivo_coords = cargar_desde_url(GDRIVE_COORDS_ID)
 
-if archivo is None:
+if archivo is None or isinstance(archivo, list):
     st.title("📊 Reporte General de Ventas")
     st.error("⚠️ No se pudo cargar el archivo de ventas desde Google Drive.")
-    st.info("Intentá recargar la página. Si el problema persiste, el archivo en Google Drive puede no estar compartido correctamente.")
+    if isinstance(archivo, list):
+        with st.expander("🔍 Detalle del error (para soporte técnico)"):
+            for e in archivo:
+                st.code(e)
+    st.info("Verificá que el archivo en Google Drive esté compartido como 'Cualquier persona con el enlace'.")
     if st.button("🔄 Reintentar"):
         st.cache_data.clear()
         st.rerun()
