@@ -245,7 +245,9 @@ def resumen_clasificacion(base_df, ventas_df, resumen_df=None):
     clasif["subclasificacion"] = clasif.get("subclasificacion", pd.Series(dtype=str)).fillna("Sin subclasificación") if "subclasificacion" in clasif.columns else "—"
 
     # Facturación por clasificación cruzando con ventas
-    ventas_c = ventas_df.merge(clasif, on="cod_cliente", how="left")
+    # Eliminamos clasificacion/subclasificacion de ventas para evitar duplicados al mergear con la base
+    cols_drop = [c for c in ["clasificacion","subclasificacion"] if c in ventas_df.columns]
+    ventas_c = ventas_df.drop(columns=cols_drop).merge(clasif, on="cod_cliente", how="left")
     ventas_c["clasificacion"]    = ventas_c["clasificacion"].fillna("Sin clasificación")
     ventas_c["subclasificacion"] = ventas_c["subclasificacion"].fillna("Sin subclasificación") if "subclasificacion" in ventas_c.columns else "—"
 
