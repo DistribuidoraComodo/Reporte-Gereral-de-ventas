@@ -345,9 +345,12 @@ def tab_analisis_marcas(ventas_df, base_df, key_prefix="", vendedores_disponible
         st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
         return
 
+    # Filtrar ventas al período Y solo clientes que están en la base (respeta filtro de clasificación)
+    cods_en_base = set(base_df["cod_cliente"].dropna().unique())
     ventas_periodo = ventas_df[
         (ventas_df["fecha"] >= pd.Timestamp(desde_m)) &
-        (ventas_df["fecha"] <= pd.Timestamp(hasta_m))
+        (ventas_df["fecha"] <= pd.Timestamp(hasta_m)) &
+        (ventas_df["cod_cliente"].isin(cods_en_base))
     ]
     if ventas_periodo.empty:
         st.warning("No hay ventas en el período seleccionado.")
