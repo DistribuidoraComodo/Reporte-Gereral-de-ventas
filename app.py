@@ -1351,8 +1351,8 @@ elif rol == "Gerencia":
     compraron_mes = set(
         ventas_g[(ventas_g["año"]==año_act) & (ventas_g["mes"]==mes_act)]["cod_cliente"].dropna().unique()
     )
-    # Clientes en base: siempre desde df_base original (no filtrado por ventas)
-    total_en_base     = df_base["cod_cliente"].dropna().nunique()
+    # Clientes en base: respeta el filtro de clasificación activo (df_base_filtrada)
+    total_en_base     = df_base_filtrada["cod_cliente"].dropna().nunique()
     cods_base_g       = set(base_g["cod_cliente"].dropna().unique())
     compraron_en_base = len(cods_base_g & compraron_mes)
     pct_cobertura     = compraron_en_base / total_en_base * 100 if total_en_base else 0
