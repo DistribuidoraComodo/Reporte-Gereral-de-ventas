@@ -228,6 +228,160 @@ def fmt_compacto(v):
         return f"${v/1_000:.0f}K"
     return fmt_peso(v)
 
+def tab_ventas_articulos(ventas_df, key_prefix=""):
+    """Reporte de ventas por artículo: unidades, facturación, promedios y evolución."""
+
+    fecha_min = ventas_df["fecha"].min().date()
+    fecha_max = ventas_df["fecha"].max().date()
+
+    # ── Filtros ───────────────────────────────────────────────────────────────
+    with st.expander("🔽 Filtros", expanded=True):
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            desde_a = st.date_input("Desde", value=fecha_min, min_value=fecha_min,
+                                    max_value=fecha_max, key=f"{key_prefix}_art_desde")
+        with fc2:
+            hasta_a = st.date_input("Hasta", value=fecha_max, min_value=fecha_min,
+                                    max_value=fecha_max, key=f"{key_prefix}_art_hasta")
+
+        ff1, ff2, ff3, ff4 = st.columns(4)
+        marcas_art   = sorted(ventas_df["marca"].dropna().unique())
+        familias_art = sorted(ventas_df["familia"].dropna().unique())
+        rubros_art   = sorted(ventas_df["rubro"].dropna().unique())
+
+        sel_marca_a  = ff1.multiselect("Marca",   marcas_art,   key=f"{key_prefix}_art_marca",  placeholder="Todas")
+        sel_fam_a    = ff2.multiselect("Familia", familias_art, key=f"{key_prefix}_art_fam",    placeholder="Todas")
+        sel_rub_a    = ff3.multiselect("Rubro",   rubros_art,   key=f"{key_prefix}_art_rub",    placeholder="Todos")
+        busq_art     = ff4.text_input("Buscar artículo:", placeholder="Nombre o código",
+                                      key=f"{key_prefix}_art_busq")
+
+    if desde_a > hasta_a:
+        st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
+        return
+
+    # ── Aplicar filtros ───────────────────────────────────────────────────────
+    vf = ventas_df[(ventas_df["fecha"] >= pd.Timestamp(desde_a)) &
+                   (ventas_df["fecha"] <= pd.Timestamp(hasta_a))].copy()
+    if sel_marca_a: vf = vf[vf["marca"].isin(sel_marca_a)]
+    if sel_fam_a:   vf = vf[vf["familia"].isin(sel_fam_a)]
+    if sel_rub_a:   vf = vf[vf["rubro"].isin(sel_rub_a)]
+    if busq_art:
+        bl = busq_art.strip().lower()
+        vf = vf[vf["descripcion"].str.lower().str.contains(bl, na=False) |
+                vf["cod_articulo"].astype(str).str.lower().str.contains(bl, na=False)]
+
+    if vf.empty:
+        st.warning("No hay ventas para los filtros seleccionados.")
+        return
+
+    # ── Calcular meses en el período para promedios ───────────────────────────
+    meses_periodo = max(1, (pd.Timestamp(hasta_a).to_period("M") -
+                            pd.Timestamp(desde_a).to_period("M")).n + 1)
+
+    # ── Tabla principal por artículo ──────────────────────────────────────────
+    grp = vf.groupby(["cod_articulo","descripcion","marca","familia","rubro"]).agg(
+        unidades   =("cantidad",    "sum"),
+        facturacion=("facturacion", "sum"),
+        clientes   =("cod_cliente", "nunique"),
+        meses_con_venta=("mes",     "nunique"),
+    ).reset_index()
+
+    grp["prom_mens_uds"]  = (grp["unidades"]    / meses_periodo).round(1)
+    grp["prom_mens_fact"] = (grp["facturacion"] / meses_periodo).round(0)
+    grp["precio_prom"]    = (grp["facturacion"] / grp["unidades"].replace(0, pd.NA)).round(2)
+
+    # KPIs rápidos
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("📦 Artículos distintos",   f"{len(grp):,}")
+    k2.metric("📊 Total unidades",        f"{grp['unidades'].sum():,.0f}")
+    k3.metric("💰 Facturación total",     fmt_peso(grp["facturacion"].sum()))
+    k4.metric("👥 Clientes distintos",    f"{vf['cod_cliente'].nunique():,}")
+
+    st.markdown("---")
+
+    # Ordenamiento
+    ord_col = st.radio("Ordenar por:", ["Unidades","Facturación","Precio promedio","Clientes"],
+                       horizontal=True, key=f"{key_prefix}_art_orden")
+    ord_map = {"Unidades":"unidades","Facturación":"facturacion",
+               "Precio promedio":"precio_prom","Clientes":"clientes"}
+    grp = grp.sort_values(ord_map[ord_col], ascending=False).reset_index(drop=True)
+    grp.insert(0, "#", range(1, len(grp)+1))
+
+    tbl = grp.copy()
+    tbl["unidades"]        = tbl["unidades"].apply(lambda x: f"{x:,.0f}")
+    tbl["facturacion"]     = tbl["facturacion"].apply(fmt_peso)
+    tbl["prom_mens_uds"]   = tbl["prom_mens_uds"].apply(lambda x: f"{x:,.1f}")
+    tbl["prom_mens_fact"]  = tbl["prom_mens_fact"].apply(fmt_peso)
+    tbl["precio_prom"]     = tbl["precio_prom"].apply(lambda x: fmt_peso(x) if pd.notna(x) else "—")
+    tbl["clientes"]        = tbl["clientes"].astype(int)
+    tbl["meses_con_venta"] = tbl["meses_con_venta"].astype(int)
+    tbl.columns = ["#","Código","Descripción","Marca","Familia","Rubro",
+                   "Unidades","Facturación","Clientes","Meses c/venta",
+                   "Prom. mens. (uds)","Prom. mens. ($)","Precio prom."]
+    st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+    st.download_button("📥 Descargar tabla",
+                       tbl.to_csv(index=False).encode("utf-8"),
+                       file_name=f"ventas_articulos_{key_prefix}.csv",
+                       mime="text/csv", key=f"{key_prefix}_art_dl")
+
+    # ── Detalle mensual de un artículo ────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🔍 Evolución mensual de un artículo")
+    arts_lista = grp["Descripción"].tolist()
+    art_sel = st.selectbox("Seleccioná un artículo:", arts_lista,
+                           key=f"{key_prefix}_art_det_sel")
+
+    cod_art_sel = grp[grp["Descripción"] == art_sel]["Código"].iloc[0]
+    vf_art = ventas_df[ventas_df["cod_articulo"] == cod_art_sel].copy()
+    vf_art["periodo"] = pd.to_datetime(
+        vf_art["año"].astype(str) + "-" + vf_art["mes"].astype(str).str.zfill(2) + "-01")
+
+    evol = vf_art.groupby("periodo").agg(
+        unidades   =("cantidad",    "sum"),
+        facturacion=("facturacion", "sum"),
+        clientes   =("cod_cliente", "nunique"),
+    ).reset_index().sort_values("periodo")
+
+    # Promedio mensual histórico
+    prom_uds  = evol["unidades"].mean()
+    prom_fact = evol["facturacion"].mean()
+
+    da1, da2, da3 = st.columns(3)
+    da1.metric("Prom. mensual (uds)",  f"{prom_uds:,.1f}")
+    da2.metric("Prom. mensual ($)",    fmt_peso(prom_fact))
+    da3.metric("Meses con venta",      len(evol))
+
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        fig_u = px.bar(evol, x="periodo", y="unidades",
+                       title="Unidades por mes",
+                       labels={"periodo":"","unidades":"Unidades"},
+                       color_discrete_sequence=["#0066cc"])
+        fig_u.add_hline(y=prom_uds, line_dash="dash", line_color="orange",
+                        annotation_text=f"Prom: {prom_uds:,.1f}")
+        fig_u.update_layout(xaxis_tickformat="%b %Y")
+        st.plotly_chart(fig_u, use_container_width=True)
+    with col_g2:
+        fig_f = px.bar(evol, x="periodo", y="facturacion",
+                       title="Facturación por mes",
+                       labels={"periodo":"","facturacion":"Facturación ($)"},
+                       color_discrete_sequence=["#28a745"])
+        fig_f.add_hline(y=prom_fact, line_dash="dash", line_color="orange",
+                        annotation_text=f"Prom: {fmt_compacto(prom_fact)}")
+        fig_f.update_layout(xaxis_tickformat="%b %Y")
+        st.plotly_chart(fig_f, use_container_width=True)
+
+    # Tabla mensual del artículo
+    tbl_evol = evol.copy()
+    tbl_evol["periodo"]     = tbl_evol["periodo"].dt.strftime("%b %Y")
+    tbl_evol["unidades"]    = tbl_evol["unidades"].apply(lambda x: f"{x:,.0f}")
+    tbl_evol["facturacion"] = tbl_evol["facturacion"].apply(fmt_peso)
+    tbl_evol["clientes"]    = tbl_evol["clientes"].astype(int)
+    tbl_evol.columns = ["Período","Unidades","Facturación","Clientes"]
+    st.dataframe(tbl_evol, use_container_width=True, hide_index=True)
+
+
 def resumen_clasificacion(base_df, ventas_df, resumen_df=None):
     """
     Muestra un resumen de clientes agrupado por Clasificación y Subclasificación.
@@ -1082,12 +1236,12 @@ if rol == "Vendedor":
     st.divider()
 
     # Tabs
-    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente"]
+    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente", "📦 Artículos"]
     if df_coords is not None:
         tab_labels.append("🗺️ Mapa")
     tab_objs = st.tabs(tab_labels)
-    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v = tab_objs[:6]
-    tab_map_v = tab_objs[6] if df_coords is not None else None
+    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v, tab_art_v = tab_objs[:7]
+    tab_map_v = tab_objs[7] if df_coords is not None else None
 
     with tab_cli:
         filtro = st.segmented_control(
@@ -1225,6 +1379,9 @@ if rol == "Vendedor":
 
     with tab_mix_v:
         tab_mix_cliente(ventas_v, base_v, key_prefix="vend_mix")
+
+    with tab_art_v:
+        tab_ventas_articulos(ventas_v, key_prefix="vend_art")
 
     if tab_map_v is not None:
         with tab_map_v:
@@ -1371,12 +1528,12 @@ elif rol == "Gerencia":
 
     st.divider()
 
-    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🏷️ Marcas y rubros","🗺️ Provincia","⚠️ Inactivos por período","🔍 Análisis de marcas","🔍 Mix por cliente"]
+    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🏷️ Marcas y rubros","🗺️ Provincia","⚠️ Inactivos por período","🔍 Análisis de marcas","🔍 Mix por cliente","📦 Artículos"]
     if df_coords is not None:
         tab_labels_g.append("🗺️ Mapa")
     tabs_g = st.tabs(tab_labels_g)
-    t_rank, t_mens, t_evol, t_marc, t_prov, t_inact_g, t_marc_g, t_mix_g = tabs_g[:8]
-    t_mapa = tabs_g[8] if df_coords is not None else None
+    t_rank, t_mens, t_evol, t_marc, t_prov, t_inact_g, t_marc_g, t_mix_g, t_art_g = tabs_g[:9]
+    t_mapa = tabs_g[9] if df_coords is not None else None
 
     with t_rank:
         # Usar el vendedor de la hoja Ventas (quien realmente vendió), no la asignación de la base.
@@ -1576,6 +1733,9 @@ elif rol == "Gerencia":
 
     with t_mix_g:
         tab_mix_cliente(ventas_g, base_g, key_prefix="ger_mix")
+
+    with t_art_g:
+        tab_ventas_articulos(ventas_g, key_prefix="ger_art")
 
     if t_mapa is not None:
         with t_mapa:
