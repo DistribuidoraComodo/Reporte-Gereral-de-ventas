@@ -288,7 +288,7 @@ def tab_ventas_articulos(ventas_df, key_prefix=""):
 
     grp["prom_mens_uds"]  = (grp["unidades"]    / meses_periodo).round(1)
     grp["prom_mens_fact"] = (grp["facturacion"] / meses_periodo).round(0)
-    grp["precio_prom"]    = (grp["facturacion"] / grp["unidades"].replace(0, pd.NA)).round(2)
+    grp["precio_prom"]    = (grp["facturacion"] / grp["unidades"].where(grp["unidades"] != 0)).round(2)
 
     # KPIs rápidos
     k1, k2, k3, k4 = st.columns(4)
