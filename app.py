@@ -381,6 +381,62 @@ def tab_ventas_articulos(ventas_df, key_prefix=""):
     tbl_evol.columns = ["Período","Unidades","Facturación","Clientes"]
     st.dataframe(tbl_evol, use_container_width=True, hide_index=True)
 
+    # ── Ranking de clientes del artículo ─────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 👥 Clientes que más compran este artículo")
+    st.caption("Aplica el período y filtros seleccionados arriba.")
+
+    vf_art_filt = vf[vf["cod_articulo"] == cod_art_sel]
+    if vf_art_filt.empty:
+        st.info("No hay clientes en el período/filtros seleccionados para este artículo.")
+    else:
+        crit_cli = st.radio("Ordenar por:", ["Unidades", "Facturación"],
+                            horizontal=True, key=f"{key_prefix}_art_cli_crit")
+        col_cli_ord = "unidades" if crit_cli == "Unidades" else "facturacion"
+
+        top_cli = (
+            vf_art_filt.groupby("cod_cliente").agg(
+                unidades     =("cantidad",    "sum"),
+                facturacion  =("facturacion", "sum"),
+                ultima_compra=("fecha",       "max"),
+                cliente      =("cliente",     "first"),
+            ).reset_index()
+            .sort_values(col_cli_ord, ascending=False)
+            .reset_index(drop=True)
+        )
+        top_cli.insert(0, "#", range(1, len(top_cli)+1))
+
+        # Gráfico top 10
+        top10_cli = top_cli.head(10)
+        fig_cli = px.bar(
+            top10_cli, x=col_cli_ord, y="cliente", orientation="h",
+            title=f"Top 10 clientes — {art_sel[:50]}",
+            labels={col_cli_ord: crit_cli, "cliente": ""},
+            color_discrete_sequence=["#0066cc"],
+            text=top10_cli[col_cli_ord].apply(
+                lambda x: f"{x:,.0f}" if crit_cli == "Unidades" else fmt_compacto(x))
+        )
+        fig_cli.update_traces(textposition="outside")
+        fig_cli.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(t=40, r=100))
+        st.plotly_chart(fig_cli, use_container_width=True)
+
+        # Tabla completa
+        tbl_cli = top_cli.copy()
+        tbl_cli["unidades"]      = tbl_cli["unidades"].apply(lambda x: f"{x:,.0f}")
+        tbl_cli["facturacion"]   = tbl_cli["facturacion"].apply(fmt_peso)
+        tbl_cli["ultima_compra"] = tbl_cli["ultima_compra"].dt.strftime("%d/%m/%Y")
+        tbl_cli = tbl_cli[["#","cliente","unidades","facturacion","ultima_compra"]]
+        tbl_cli.columns = ["#","Cliente","Unidades","Facturación","Última compra"]
+        st.dataframe(tbl_cli, use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "📥 Descargar ranking de clientes",
+            tbl_cli.to_csv(index=False).encode("utf-8"),
+            file_name=f"clientes_{cod_art_sel}.csv",
+            mime="text/csv",
+            key=f"{key_prefix}_art_cli_dl"
+        )
+
 
 def resumen_clasificacion(base_df, ventas_df, resumen_df=None):
     """
