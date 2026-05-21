@@ -328,11 +328,11 @@ def tab_ventas_articulos(ventas_df, key_prefix=""):
     # ── Detalle mensual de un artículo ────────────────────────────────────────
     st.markdown("---")
     st.markdown("#### 🔍 Evolución mensual de un artículo")
-    arts_lista = grp["Descripción"].tolist()
+    arts_lista = grp["descripcion"].tolist()
     art_sel = st.selectbox("Seleccioná un artículo:", arts_lista,
                            key=f"{key_prefix}_art_det_sel")
 
-    cod_art_sel = grp[grp["Descripción"] == art_sel]["Código"].iloc[0]
+    cod_art_sel = grp[grp["descripcion"] == art_sel]["cod_articulo"].iloc[0]
     vf_art = ventas_df[ventas_df["cod_articulo"] == cod_art_sel].copy()
     vf_art["periodo"] = pd.to_datetime(
         vf_art["año"].astype(str) + "-" + vf_art["mes"].astype(str).str.zfill(2) + "-01")
