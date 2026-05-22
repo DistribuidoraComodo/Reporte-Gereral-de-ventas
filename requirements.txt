@@ -2,5 +2,6 @@ streamlit
 pandas
 plotly
 openpyxl
+python-calamine
 requests
 gdown
