@@ -1506,6 +1506,11 @@ if archivo is None or isinstance(archivo, list):
 with st.sidebar:
     st.markdown("## 📊 Reporte General de Ventas")
     rol = st.radio("Ingresar como:", ["Vendedor","Gerencia"])
+    st.markdown("---")
+    if st.button("🔄 Actualizar datos", use_container_width=True,
+                 help="Limpia la caché y recarga el archivo desde Google Drive"):
+        st.cache_data.clear()
+        st.rerun()
 
 df_ventas, df_base, df_stock, df_precios = cargar_datos(archivo)
 hoy = df_ventas["fecha"].max()
@@ -1980,8 +1985,15 @@ elif rol == "Gerencia":
             cods_str = set(str(int(c)) for c in vdf_g[vdf_g["vendedor_asignado"].isin(sel_vend)]["cod_vendedor"].dropna())
             ventas_rank = ventas_rank[ventas_rank["cod_vendedor"].astype(str).str.replace(r'\.0$','',regex=True).isin(cods_str)]
 
+        # Filtro por vendedor dentro del ranking
+        vends_rank_opts = ["Todos"] + sorted(ventas_rank["vendedor"].dropna().unique().tolist())
+        sel_vend_rank = st.selectbox("Filtrar vendedor:", vends_rank_opts, key="rank_vend_g")
+
+        ventas_rank_f = ventas_rank if sel_vend_rank == "Todos" else \
+                        ventas_rank[ventas_rank["vendedor"] == sel_vend_rank]
+
         ranking = (
-            ventas_rank[ventas_rank["año"]==año_act]
+            ventas_rank_f[ventas_rank_f["año"]==año_act]
             .groupby("vendedor")["facturacion"].sum()
             .reset_index().sort_values("facturacion", ascending=False)
         )
@@ -1999,6 +2011,24 @@ elif rol == "Gerencia":
             tbl["facturacion"] = tbl["facturacion"].apply(fmt_peso)
             tbl.columns = ["#", "Vendedor", f"Fact. {año_act}"]
             st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+        # Evolución mensual cuando hay un vendedor seleccionado
+        if sel_vend_rank != "Todos":
+            st.markdown(f"#### 📅 Facturación mensual — {sel_vend_rank}")
+            ventas_rank_vend = ventas_g[ventas_g["vendedor"] == sel_vend_rank]
+            st.dataframe(tabla_mensual(ventas_rank_vend), use_container_width=True)
+
+            evol_rv = ventas_rank_vend.groupby(["año","mes"])["facturacion"].sum().reset_index()
+            evol_rv["periodo"] = pd.to_datetime(
+                evol_rv["año"].astype(str) + "-" + evol_rv["mes"].astype(str).str.zfill(2) + "-01")
+            evol_rv["año"] = evol_rv["año"].astype(str)
+            fig_rv = px.bar(evol_rv.sort_values("periodo"), x="periodo", y="facturacion",
+                            color="año", barmode="group",
+                            title=f"Evolución mensual — {sel_vend_rank}",
+                            labels={"periodo": "", "facturacion": "Facturación ($)", "año": "Año"},
+                            color_discrete_sequence=px.colors.qualitative.Set1)
+            fig_rv.update_layout(xaxis_tickformat="%b %Y", hovermode="x unified")
+            st.plotly_chart(fig_rv, use_container_width=True)
 
         st.markdown("---")
         with st.expander("📊 Resumen por clasificación y subclasificación"):
