@@ -30,8 +30,8 @@ def cargar_datos(archivo):
     import io
     raw = bytes(archivo) if isinstance(archivo, (bytes, bytearray)) else archivo.read()
 
-    # Abrir el archivo una sola vez; parse() lee cada hoja sin reabrir
-    xls = pd.ExcelFile(io.BytesIO(raw), engine="openpyxl")
+    # Abrir el archivo una sola vez con calamine (Rust, ~10x más rápido que openpyxl)
+    xls = pd.ExcelFile(io.BytesIO(raw), engine="calamine")
     hojas = xls.sheet_names
 
     def _find_col(df, keywords):
@@ -129,7 +129,7 @@ def cargar_coords(archivo):
     import io
     if isinstance(archivo, (bytes, bytearray)):
         archivo = io.BytesIO(archivo)
-    df = pd.read_excel(archivo)
+    df = pd.read_excel(archivo, engine="calamine")
     cols_orig = list(df.columns)
     df.columns = [str(c).strip() for c in df.columns]
 
