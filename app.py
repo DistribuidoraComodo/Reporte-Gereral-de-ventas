@@ -29,10 +29,19 @@ MESES_FULL = {1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
 def cargar_datos(archivo):
     import io
     raw = bytes(archivo) if isinstance(archivo, (bytes, bytearray)) else archivo.read()
-    def mkf(): return io.BytesIO(raw)
+
+    # Leer TODAS las hojas de una sola vez para evitar múltiples aperturas del archivo
+    todas = pd.read_excel(io.BytesIO(raw), sheet_name=None, engine="openpyxl")
+
+    def _find_col(df, keywords):
+        for c in df.columns:
+            lc = c.lower().replace(" ", "").replace("_", "")
+            if any(k in lc for k in keywords):
+                return c
+        return None
 
     # -- Hoja Ventas --
-    df_v = pd.read_excel(mkf(), sheet_name="Ventas")
+    df_v = todas["Ventas"].copy()
     nombres_v = [
         "fecha","periodo","cod_cliente","cliente","cod_vendedor","vendedor",
         "cbte","t_cbte","pto_vta","n_cbte","cod_articulo","descripcion",
@@ -46,82 +55,63 @@ def cargar_datos(archivo):
     df_v["año"] = df_v["fecha"].dt.year
     df_v["mes"] = df_v["fecha"].dt.month
     df_v["cod_vendedor"] = pd.to_numeric(df_v["cod_vendedor"], errors="coerce")
-    df_v["cod_cliente"] = pd.to_numeric(df_v["cod_cliente"], errors="coerce")
+    df_v["cod_cliente"]  = pd.to_numeric(df_v["cod_cliente"],  errors="coerce")
 
     # -- Hoja Base clientes --
-    df_b = pd.read_excel(mkf(), sheet_name="Base clientes")
+    df_b = todas["Base clientes"].copy()
     df_b.columns = [str(c).strip() for c in df_b.columns]
-    # Mapear columnas clave
     df_b = df_b.rename(columns={
-        "Código":         "cod_cliente",
-        "Razón Social":   "razon_social",
-        "Nombre":         "nombre_fantasia",
-        "Vendedor":       "vendedor_asignado",
-        "Localidad":      "localidad",
-        "Provincia":      "provincia",
-        "Mail":           "mail",
-        "Telefono":       "telefono",
-        "Clasificacion":  "clasificacion",
+        "Código":          "cod_cliente",
+        "Razón Social":    "razon_social",
+        "Nombre":          "nombre_fantasia",
+        "Vendedor":        "vendedor_asignado",
+        "Localidad":       "localidad",
+        "Provincia":       "provincia",
+        "Mail":            "mail",
+        "Telefono":        "telefono",
+        "Clasificacion":   "clasificacion",
         "SubClasificacion":"subclasificacion",
-        "Zona":           "zona",
-        "Fechaalta":      "fecha_alta",
-        "Fechabaja":      "fecha_baja",
+        "Zona":            "zona",
+        "Fechaalta":       "fecha_alta",
+        "Fechabaja":       "fecha_baja",
     })
     df_b["cod_cliente"] = pd.to_numeric(df_b["cod_cliente"], errors="coerce")
     df_b = df_b.dropna(subset=["cod_cliente"])
     if "fecha_alta" in df_b.columns:
         df_b["fecha_alta"] = pd.to_datetime(df_b["fecha_alta"], errors="coerce")
-    # Extraer código de vendedor del texto "APELLIDO (20004)"
     df_b["cod_vendedor"] = (
         df_b["vendedor_asignado"]
         .str.extract(r'\((\d+)\)')
         .squeeze()
         .pipe(pd.to_numeric, errors="coerce")
     )
-    # -- Hojas Stock y Precios (detección automática) --
-    def _find_col(df, keywords):
-        for c in df.columns:
-            lc = c.lower().replace(" ", "").replace("_", "")
-            if any(k in lc for k in keywords):
-                return c
-        return None
 
-    hojas = pd.ExcelFile(mkf()).sheet_names
-
+    # -- Hojas Stock y Precios (detección automática entre las hojas ya cargadas) --
     df_stock = None
-    for h in hojas:
-        if "stock" in h.lower() or "existencia" in h.lower():
-            try:
-                ds = pd.read_excel(mkf(), sheet_name=h)
-                ds.columns = [str(c).strip() for c in ds.columns]
-                cc = _find_col(ds, ["cod", "código", "codigo", "articulo", "art"])
-                cs = _find_col(ds, ["stock", "cantidad", "existencia", "saldo", "unid"])
-                if cc and cs:
-                    ds = ds.rename(columns={cc: "cod_articulo", cs: "stock_actual"})
-                    ds["cod_articulo"] = ds["cod_articulo"].astype(str).str.strip()
-                    ds["stock_actual"] = pd.to_numeric(ds["stock_actual"], errors="coerce").fillna(0)
-                    df_stock = ds[["cod_articulo", "stock_actual"]].dropna(subset=["cod_articulo"]).copy()
-            except Exception:
-                pass
-            break
-
     df_precios = None
-    for h in hojas:
-        hl = h.lower()
-        if any(k in hl for k in ["precio", "lista", "costo"]):
-            try:
-                dp = pd.read_excel(mkf(), sheet_name=h)
-                dp.columns = [str(c).strip() for c in dp.columns]
-                cc = _find_col(dp, ["cod", "código", "codigo", "articulo", "art"])
-                cp = _find_col(dp, ["precio", "costo", "lista", "unitario", "valor"])
-                if cc and cp:
-                    dp = dp.rename(columns={cc: "cod_articulo", cp: "precio_unitario"})
-                    dp["cod_articulo"] = dp["cod_articulo"].astype(str).str.strip()
-                    dp["precio_unitario"] = pd.to_numeric(dp["precio_unitario"], errors="coerce").fillna(0)
-                    df_precios = dp[["cod_articulo", "precio_unitario"]].dropna(subset=["cod_articulo"]).copy()
-            except Exception:
-                pass
-            break
+
+    for nombre, df_h in todas.items():
+        hn = nombre.lower()
+        df_h = df_h.copy()
+        df_h.columns = [str(c).strip() for c in df_h.columns]
+
+        if df_stock is None and ("stock" in hn or "existencia" in hn):
+            cc = _find_col(df_h, ["cod", "código", "codigo", "articulo", "art"])
+            cs = _find_col(df_h, ["stock", "cantidad", "existencia", "saldo", "unid"])
+            if cc and cs:
+                df_h = df_h.rename(columns={cc: "cod_articulo", cs: "stock_actual"})
+                df_h["cod_articulo"] = df_h["cod_articulo"].astype(str).str.strip()
+                df_h["stock_actual"] = pd.to_numeric(df_h["stock_actual"], errors="coerce").fillna(0)
+                df_stock = df_h[["cod_articulo","stock_actual"]].dropna(subset=["cod_articulo"]).copy()
+
+        if df_precios is None and any(k in hn for k in ["precio", "lista", "costo"]):
+            cc = _find_col(df_h, ["cod", "código", "codigo", "articulo", "art"])
+            cp = _find_col(df_h, ["precio", "costo", "lista", "unitario", "valor"])
+            if cc and cp:
+                df_h = df_h.rename(columns={cc: "cod_articulo", cp: "precio_unitario"})
+                df_h["cod_articulo"]    = df_h["cod_articulo"].astype(str).str.strip()
+                df_h["precio_unitario"] = pd.to_numeric(df_h["precio_unitario"], errors="coerce").fillna(0)
+                df_precios = df_h[["cod_articulo","precio_unitario"]].dropna(subset=["cod_articulo"]).copy()
 
     return df_v, df_b, df_stock, df_precios
 
