@@ -101,7 +101,8 @@ def cargar_datos(archivo):
                 cs = _find_col(ds, ["stock", "cantidad", "existencia", "saldo", "unid"])
                 if cc and cs:
                     ds = ds.rename(columns={cc: "cod_articulo", cs: "stock_actual"})
-                    ds["cod_articulo"] = ds["cod_articulo"].astype(str).str.strip()
+                    ds["cod_articulo"] = (ds["cod_articulo"].astype(str).str.strip()
+                                          .str.replace(r'\.0+$', '', regex=True).str.upper())
                     ds["stock_actual"] = pd.to_numeric(ds["stock_actual"], errors="coerce").fillna(0)
                     df_stock = ds[["cod_articulo","stock_actual"]].dropna(subset=["cod_articulo"]).copy()
             except Exception:
@@ -115,7 +116,8 @@ def cargar_datos(archivo):
                 cp = _find_col(dp, ["precio", "costo", "lista", "unitario", "valor"])
                 if cc and cp:
                     dp = dp.rename(columns={cc: "cod_articulo", cp: "precio_unitario"})
-                    dp["cod_articulo"]    = dp["cod_articulo"].astype(str).str.strip()
+                    dp["cod_articulo"]    = (dp["cod_articulo"].astype(str).str.strip()
+                                             .str.replace(r'\.0+$', '', regex=True).str.upper())
                     dp["precio_unitario"] = pd.to_numeric(dp["precio_unitario"], errors="coerce").fillna(0)
                     df_precios = dp[["cod_articulo","precio_unitario"]].dropna(subset=["cod_articulo"]).copy()
             except Exception:
@@ -286,7 +288,8 @@ def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix="
         stock_map = df_stock.set_index("cod_articulo")["stock_actual"].to_dict()
 
     vdf = ventas_df.copy()
-    vdf["cod_str"] = vdf["cod_articulo"].astype(str).str.strip()
+    vdf["cod_str"] = (vdf["cod_articulo"].astype(str).str.strip()
+                      .str.replace(r'\.0+$', '', regex=True).str.upper())
 
     # ── Eje de tiempo: todos los meses del histórico ──────────────────────────
     time_df = (
