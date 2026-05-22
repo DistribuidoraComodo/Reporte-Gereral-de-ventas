@@ -1945,9 +1945,9 @@ elif rol == "Gerencia":
     compraron_mes = set(
         ventas_g[(ventas_g["año"]==año_act) & (ventas_g["mes"]==mes_act)]["cod_cliente"].dropna().unique()
     )
-    # Clientes en base: respeta el filtro de clasificación activo (df_base_filtrada)
-    total_en_base     = df_base_filtrada["cod_cliente"].dropna().nunique()
+    # Clientes en base: siempre desde base_g (vendedores reales + filtro clasificación)
     cods_base_g       = set(base_g["cod_cliente"].dropna().unique())
+    total_en_base     = len(cods_base_g)
     compraron_en_base = len(cods_base_g & compraron_mes)
     pct_cobertura     = compraron_en_base / total_en_base * 100 if total_en_base else 0
     nombre_mes_g      = MESES_FULL.get(mes_act, "")
@@ -2134,22 +2134,25 @@ elif rol == "Gerencia":
                 (ventas_g["fecha"] >= pd.Timestamp(desde_g)) &
                 (ventas_g["fecha"] <= pd.Timestamp(hasta_g))
             ]
-            compraron_g = set(ventas_rango_g["cod_cliente"].unique())
+            # Solo clientes de la base (misma población en los 3 indicadores)
+            cods_base_inact   = set(base_g["cod_cliente"].dropna().unique())
+            compraron_g_base  = set(ventas_rango_g["cod_cliente"].unique()) & cods_base_inact
 
-            # Resumen de todos los clientes de la base filtrada
+            # Resumen de todos los clientes de la base
             resumen_inact_g = resumen_clientes(base_g, ventas_g, hoy.strftime("%Y-%m-%d"))
             resumen_inact_g = resumen_inact_g.merge(
                 base_g[["cod_cliente","vendedor_asignado"]].drop_duplicates("cod_cliente"),
                 on="cod_cliente", how="left"
             )
-            inact_g = resumen_inact_g[~resumen_inact_g["cod_cliente"].isin(compraron_g)].copy()
+            # Inactivos = base que NO compró en el período (misma lista base)
+            inact_g = resumen_inact_g[~resumen_inact_g["cod_cliente"].isin(compraron_g_base)].copy()
             inact_g = inact_g.sort_values("dias_sin_compra", ascending=False)
 
             st.markdown(f"**Sin compras entre {desde_g.strftime('%d/%m/%Y')} y {hasta_g.strftime('%d/%m/%Y')}:**")
 
             col_a, col_b, col_c = st.columns(3)
-            col_a.metric("Total clientes en base", len(base_g))
-            col_b.metric("Compraron en el período", len(compraron_g))
+            col_a.metric("Total clientes en base", len(cods_base_inact))
+            col_b.metric("Compraron en el período", len(compraron_g_base))
             col_c.metric("❌ No compraron en el período", len(inact_g))
 
             # Agrupar por vendedor
