@@ -87,6 +87,36 @@ def cargar_datos(archivo):
         .pipe(pd.to_numeric, errors="coerce")
     )
 
+    # -- Hoja Base artículos (descripción limpia, sin lote) --
+    df_art = None
+    for h in hojas:
+        hn = h.lower().replace(" ", "").replace("_", "")
+        if "base" in hn and "art" in hn:
+            try:
+                da = xls.parse(h)
+                da.columns = [str(c).strip() for c in da.columns]
+                cc = _find_col(da, ["cod", "código", "codigo", "articulo", "art"])
+                cd = _find_col(da, ["desc", "nombre", "detalle"])
+                if cc and cd:
+                    da = da.rename(columns={cc: "cod_articulo", cd: "descripcion"})
+                    da["cod_articulo"] = (da["cod_articulo"].astype(str).str.strip()
+                                          .str.replace(r'\.0+$', '', regex=True).str.upper())
+                    da["descripcion"]  = da["descripcion"].astype(str).str.strip()
+                    # Columnas opcionales: marca, familia, rubro, subrubro
+                    for campo, palabras in [("marca",["marca","brand"]),
+                                            ("familia",["familia","family","categ"]),
+                                            ("rubro",["rubro","rubr","tipo"]),
+                                            ("subrubro",["subrubro","sub"])]:
+                        cx = _find_col(da, palabras)
+                        if cx and cx not in ("cod_articulo","descripcion"):
+                            da = da.rename(columns={cx: campo})
+                    cols_keep = [c for c in ["cod_articulo","descripcion","marca","familia","rubro","subrubro"]
+                                 if c in da.columns]
+                    df_art = da[cols_keep].dropna(subset=["cod_articulo"]).drop_duplicates("cod_articulo").copy()
+            except Exception:
+                pass
+            break
+
     # -- Hojas Stock y Precios (detección automática) --
     df_stock = None
     df_precios = None
@@ -123,7 +153,7 @@ def cargar_datos(archivo):
             except Exception:
                 pass
 
-    return df_v, df_b, df_stock, df_precios
+    return df_v, df_b, df_stock, df_precios, df_art
 
 
 @st.cache_data(show_spinner="Cargando coordenadas...")
@@ -274,7 +304,7 @@ def fmt_compacto(v):
         return f"${v/1_000:.0f}K"
     return fmt_peso(v)
 
-def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix=""):
+def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, df_articulos=None, key_prefix=""):
     """Grilla de artículos tipo planilla — unidades mes a mes, totales, promedios, stock."""
 
     hoy_art = ventas_df["fecha"].max()
@@ -347,6 +377,16 @@ def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix="
         )
         .reset_index()
     )
+    # ── Descripción limpia desde Base artículos (sin número de lote) ─────────
+    if df_articulos is not None and not df_articulos.empty:
+        da_norm = df_articulos.copy()
+        da_norm["cod_str"] = (da_norm["cod_articulo"].astype(str).str.strip()
+                               .str.replace(r'\.0+$', '', regex=True).str.upper())
+        for campo in ["descripcion", "marca", "familia", "rubro", "subrubro"]:
+            if campo in da_norm.columns:
+                campo_map = da_norm.set_index("cod_str")[campo].to_dict()
+                meta[campo] = meta["cod_str"].map(campo_map).fillna(meta[campo])
+
     meta["stock"]     = meta["cod_str"].map(stock_map).fillna(0)
     meta["precio"]    = meta["cod_str"].map(precios_map).fillna(0)
     meta["val_stock"] = (meta["stock"] * meta["precio"]).round(0)
@@ -1515,7 +1555,7 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-df_ventas, df_base, df_stock, df_precios = cargar_datos(archivo)
+df_ventas, df_base, df_stock, df_precios, df_articulos = cargar_datos(archivo)
 hoy = df_ventas["fecha"].max()
 df_coords = cargar_coords(archivo_coords) if archivo_coords else None
 
@@ -2204,7 +2244,7 @@ elif rol == "Gerencia":
         tab_mix_cliente(ventas_g, base_g, key_prefix="ger_mix")
 
     with t_art_g:
-        tab_ventas_articulos(ventas_g, df_stock=df_stock, df_precios=df_precios, key_prefix="ger_art")
+        tab_ventas_articulos(ventas_g, df_stock=df_stock, df_precios=df_precios, df_articulos=df_articulos, key_prefix="ger_art")
 
     with t_sem_g:
         tab_semaforo(ventas_g, base_g, key_prefix="ger_sem")
