@@ -273,235 +273,242 @@ def fmt_compacto(v):
     return fmt_peso(v)
 
 def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix=""):
-    """Reporte de ventas por artículo con pivot mensual, stock valorizado y composición por marca."""
+    """Grilla de artículos tipo planilla — unidades mes a mes, totales, promedios, stock."""
 
-    fecha_min = ventas_df["fecha"].min().date()
-    fecha_max = ventas_df["fecha"].max().date()
+    hoy_art = ventas_df["fecha"].max()
 
-    # ── Filtros ───────────────────────────────────────────────────────────────
-    with st.expander("🔽 Filtros", expanded=True):
-        fc1, fc2 = st.columns(2)
-        with fc1:
-            desde_a = st.date_input("Desde", value=fecha_min, min_value=fecha_min,
-                                    max_value=fecha_max, key=f"{key_prefix}_art_desde")
-        with fc2:
-            hasta_a = st.date_input("Hasta", value=fecha_max, min_value=fecha_min,
-                                    max_value=fecha_max, key=f"{key_prefix}_art_hasta")
-        ff1, ff2, ff3 = st.columns(3)
-        sel_marca_a = ff1.multiselect("Marca",   sorted(ventas_df["marca"].dropna().unique()),
-                                      key=f"{key_prefix}_art_marca", placeholder="Todas")
-        sel_fam_a   = ff2.multiselect("Familia", sorted(ventas_df["familia"].dropna().unique()),
-                                      key=f"{key_prefix}_art_fam",   placeholder="Todas")
-        sel_rub_a   = ff3.multiselect("Rubro",   sorted(ventas_df["rubro"].dropna().unique()),
-                                      key=f"{key_prefix}_art_rub",   placeholder="Todos")
-
-    if desde_a > hasta_a:
-        st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
-        return
-
-    # ── Aplicar filtros ───────────────────────────────────────────────────────
-    vf = ventas_df[(ventas_df["fecha"] >= pd.Timestamp(desde_a)) &
-                   (ventas_df["fecha"] <= pd.Timestamp(hasta_a))].copy()
-    if sel_marca_a: vf = vf[vf["marca"].isin(sel_marca_a)]
-    if sel_fam_a:   vf = vf[vf["familia"].isin(sel_fam_a)]
-    if sel_rub_a:   vf = vf[vf["rubro"].isin(sel_rub_a)]
-
-    if vf.empty:
-        st.warning("No hay ventas para los filtros seleccionados.")
-        return
-
-    # ── Mapa de precios ───────────────────────────────────────────────────────
+    # ── Mapas rápidos ────────────────────────────────────────────────────────
     precios_map = {}
-    if df_precios is not None:
+    if df_precios is not None and not df_precios.empty:
         precios_map = df_precios.set_index("cod_articulo")["precio_unitario"].to_dict()
+    stock_map = {}
+    if df_stock is not None and not df_stock.empty:
+        stock_map = df_stock.set_index("cod_articulo")["stock_actual"].to_dict()
 
-    vf["cod_articulo_str"] = vf["cod_articulo"].astype(str).str.strip()
-    vf["precio_unitario"]  = vf["cod_articulo_str"].map(precios_map).fillna(0)
-    vf["valor"]            = vf["cantidad"] * vf["precio_unitario"]
+    vdf = ventas_df.copy()
+    vdf["cod_str"] = vdf["cod_articulo"].astype(str).str.strip()
 
-    # ── Resumen por artículo ──────────────────────────────────────────────────
-    art_meta = vf.groupby("cod_articulo").agg(
-        descripcion =("descripcion", "first"),
-        marca       =("marca",       "first"),
-        familia     =("familia",     "first"),
-        rubro       =("rubro",       "first"),
-        unidades    =("cantidad",    "sum"),
-        facturacion =("facturacion", "sum"),
-        valor       =("valor",       "sum"),
-        clientes    =("cod_cliente", "nunique"),
-    ).reset_index()
-    art_meta["cod_articulo_str"] = art_meta["cod_articulo"].astype(str).str.strip()
-    art_meta["precio_unitario"]  = art_meta["cod_articulo_str"].map(precios_map)
-
-    # ── Stock (22-5) ──────────────────────────────────────────────────────────
-    if df_stock is not None:
-        ds = df_stock.copy()
-        art_meta = art_meta.merge(ds, on="cod_articulo", how="left")
-        art_meta["stock_actual"] = art_meta["stock_actual"].fillna(0)
-        art_meta["valor_stock"] = art_meta.apply(
-            lambda r: r["stock_actual"] * r["precio_unitario"]
-            if pd.notna(r.get("precio_unitario")) else None, axis=1)
-    else:
-        art_meta["stock_actual"] = None
-        art_meta["valor_stock"]  = None
-
-    # ── Meses de stock (promedio últimos 6 meses) ─────────────────────────────
-    fecha_max_data = ventas_df["fecha"].max()
-    fecha_6m = fecha_max_data - pd.DateOffset(months=6)
-    prom_6m = (
-        ventas_df[ventas_df["fecha"] >= fecha_6m]
-        .groupby("cod_articulo")["cantidad"].sum() / 6
-    ).rename("prom_mens_6m").reset_index()
-    prom_6m["cod_articulo_str"] = prom_6m["cod_articulo"].astype(str).str.strip()
-    art_meta = art_meta.merge(prom_6m[["cod_articulo_str", "prom_mens_6m"]],
-                              on="cod_articulo_str", how="left")
-    art_meta["meses_stock"] = art_meta.apply(
-        lambda r: round(r["stock_actual"] / r["prom_mens_6m"], 1)
-        if (pd.notna(r.get("stock_actual")) and r.get("prom_mens_6m", 0) > 0) else None, axis=1)
-
-    # ── Pivot mensual de unidades ─────────────────────────────────────────────
-    all_months_df = (
-        vf.groupby(["año", "mes"]).size().reset_index()[["año", "mes"]]
-        .sort_values(["año", "mes"])
+    # ── Eje de tiempo: todos los meses del histórico ──────────────────────────
+    time_df = (
+        vdf[["año","mes"]].drop_duplicates()
+        .sort_values(["año","mes"]).reset_index(drop=True)
     )
-    all_months_df["mes_col"] = all_months_df.apply(
+    time_df["mes_col"] = time_df.apply(
         lambda r: f"{MESES[r['mes']-1]}-{str(r['año'])[-2:]}", axis=1)
-    month_cols = all_months_df["mes_col"].tolist()
-    vf["mes_col"] = vf.apply(
-        lambda r: f"{MESES[r['mes']-1]}-{str(r['año'])[-2:]}", axis=1)
-    pivot_uds = (
-        vf.groupby(["cod_articulo", "mes_col"])["cantidad"]
+    month_cols = time_df["mes_col"].tolist()
+    años_data  = sorted(time_df["año"].unique().tolist())
+
+    # Asignar mes_col por merge (vectorizado)
+    vdf = vdf.merge(time_df[["año","mes","mes_col"]], on=["año","mes"], how="left")
+
+    # ── Pivot de unidades ────────────────────────────────────────────────────
+    pivot = (
+        vdf.groupby(["cod_articulo","mes_col"])["cantidad"]
         .sum().unstack("mes_col", fill_value=0)
         .reindex(columns=month_cols, fill_value=0)
     )
-    grp = art_meta.merge(pivot_uds.reset_index(), on="cod_articulo", how="left")
 
-    # ── KPIs ──────────────────────────────────────────────────────────────────
-    ncols_kpi = 6 if df_stock is not None else 4
-    kpi_cols = st.columns(ncols_kpi)
-    kpi_cols[0].metric("📦 Artículos",   f"{len(art_meta):,}")
-    kpi_cols[1].metric("📊 Unidades",    f"{art_meta['unidades'].sum():,.0f}")
-    kpi_cols[2].metric("💰 Facturación", fmt_peso(art_meta["facturacion"].sum()))
-    kpi_cols[3].metric("👥 Clientes",    f"{vf['cod_cliente'].nunique():,}")
-    if df_stock is not None:
-        kpi_cols[4].metric("📦 Stock total (22/5)", f"{art_meta['stock_actual'].sum():,.0f}")
-    if art_meta["valor_stock"].notna().any():
-        kpi_cols[5 if df_stock is not None else 4].metric(
-            "💵 Valor stock", fmt_peso(art_meta["valor_stock"].dropna().sum()))
+    # ── Totales por año ──────────────────────────────────────────────────────
+    for y in años_data:
+        cols_y = [c for c in month_cols if c.endswith(f"-{str(y)[-2:]}")]
+        pivot[f"__tot_{y}"] = pivot[cols_y].sum(axis=1)
 
-    st.markdown("---")
+    # ── Variación YoY ────────────────────────────────────────────────────────
+    if len(años_data) >= 2:
+        y1, y0 = años_data[-1], años_data[-2]
+        denom = pivot[f"__tot_{y0}"].where(pivot[f"__tot_{y0}"] > 0, other=pd.NA)
+        pivot["__var_yoy"] = ((pivot[f"__tot_{y1}"] - pivot[f"__tot_{y0}"]) / denom * 100).round(1)
+    else:
+        pivot["__var_yoy"] = pd.NA
 
-    # ── Composición valorizada (Marca / Familia / Rubro) ──────────────────────
-    st.markdown("#### 💰 Composición valorizada")
-    cv1, cv2, cv3 = st.columns([2, 1, 1])
-    with cv1:
-        comp_by = st.radio("Agrupar por:", ["Marca", "Familia", "Rubro"],
-                           horizontal=True, key=f"{key_prefix}_comp_by")
-    with cv2:
-        años_comp = ["Todos"] + [str(y) for y in sorted(vf["año"].unique())]
-        sel_año_c = st.selectbox("Año:", años_comp, key=f"{key_prefix}_comp_año")
-    with cv3:
-        meses_comp = ["Todos"] + [MESES_FULL[i] for i in range(1, 13)]
-        sel_mes_c  = st.selectbox("Mes:", meses_comp, key=f"{key_prefix}_comp_mes")
+    # ── Promedios últimos N meses ────────────────────────────────────────────
+    hoy_ts = pd.Timestamp(hoy_art.year, hoy_art.month, 1)
+    for n, col in [(12, "__p12"), (6, "__p6"), (3, "__p3")]:
+        cutoff = hoy_ts - pd.DateOffset(months=n)
+        cols_n = [r.mes_col for r in time_df.itertuples()
+                  if pd.Timestamp(r.año, r.mes, 1) >= cutoff]
+        valid  = [c for c in cols_n if c in pivot.columns]
+        pivot[col] = (pivot[valid].sum(axis=1) / n).round(1) if valid else 0.0
+    pivot["__sin_mov"] = pivot["__p6"] == 0
 
-    vf_comp = vf.copy()
-    if sel_año_c != "Todos":
-        vf_comp = vf_comp[vf_comp["año"] == int(sel_año_c)]
-    if sel_mes_c != "Todos":
-        mes_num = next(k for k, v in MESES_FULL.items() if v == sel_mes_c)
-        vf_comp = vf_comp[vf_comp["mes"] == mes_num]
-
-    col_grp_c = comp_by.lower()
-    if not vf_comp.empty:
-        usar_valor = bool(precios_map) and vf_comp["valor"].sum() > 0
-        col_val    = "valor" if usar_valor else "facturacion"
-        label_val  = "Valor a precio lista ($)" if usar_valor else "Facturación ($)"
-        comp = (
-            vf_comp.groupby(col_grp_c)[col_val].sum()
-            .reset_index(name="total")
-            .dropna(subset=[col_grp_c])
-            .pipe(lambda d: d[d["total"] > 0])
-            .sort_values("total", ascending=False)
+    # ── Metadata del artículo ────────────────────────────────────────────────
+    meta = (
+        vdf.groupby("cod_articulo")
+        .agg(
+            descripcion=("descripcion","first"),
+            marca      =("marca",      "first"),
+            familia    =("familia",    "first"),
+            rubro      =("rubro",      "first"),
+            subrubro   =("subrubro",   "first"),
+            cod_str    =("cod_str",    "first"),
         )
-        total_c = comp["total"].sum()
-        comp["pct"] = comp["total"] / total_c * 100
+        .reset_index()
+    )
+    meta["stock"]     = meta["cod_str"].map(stock_map).fillna(0)
+    meta["precio"]    = meta["cod_str"].map(precios_map).fillna(0)
+    meta["val_stock"] = (meta["stock"] * meta["precio"]).round(0)
 
-        cg1, cg2 = st.columns([2, 1])
-        with cg1:
-            fig_comp = px.bar(
-                comp.head(20), x="pct", y=col_grp_c, orientation="h",
-                title=f"Composición por {comp_by}",
-                labels={"pct": "% del total", col_grp_c: ""},
-                text=comp.head(20)["pct"].apply(lambda x: f"{x:.1f}%"),
-                color_discrete_sequence=["#0066cc"])
-            fig_comp.update_traces(textposition="outside")
-            fig_comp.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(r=100))
-            st.plotly_chart(fig_comp, use_container_width=True)
-        with cg2:
-            tbl_c = comp[[col_grp_c, "total", "pct"]].copy()
-            tbl_c["total"] = tbl_c["total"].apply(fmt_peso)
-            tbl_c["pct"]   = tbl_c["pct"].apply(lambda x: f"{x:.1f}%")
-            tbl_c.columns  = [comp_by, label_val, "% del total"]
-            st.dataframe(tbl_c, use_container_width=True, hide_index=True)
+    # ── Combinar todo ────────────────────────────────────────────────────────
+    grp = meta.merge(pivot.reset_index(), on="cod_articulo", how="left")
+    for mc in month_cols:
+        if mc not in grp.columns: grp[mc] = 0
+    for c in [f"__tot_{y}" for y in años_data] + ["__p12","__p6","__p3","__sin_mov","__var_yoy"]:
+        if c not in grp.columns: grp[c] = 0
+    grp["__sin_mov"] = grp["__sin_mov"].fillna(True).astype(bool)
+    grp["__meses_stk"] = grp.apply(
+        lambda r: round(r["stock"] / r["__p6"], 1) if r["__p6"] > 0
+                  else ("Inf" if r["stock"] > 0 else None), axis=1)
+
+    # ── Filtros UI ───────────────────────────────────────────────────────────
+    with st.expander("🔽 Filtros", expanded=True):
+        fc1, fc2 = st.columns(2)
+        busq_cod  = fc1.text_input("🔍 Código:", key=f"{key_prefix}_bco", placeholder="Ej: TDCR...")
+        busq_desc = fc2.text_input("🔍 Descripción:", key=f"{key_prefix}_bde", placeholder="Ej: AMOLADORA...")
+        f1, f2, f3, f4 = st.columns(4)
+        sel_marca = f1.multiselect("Marca",    sorted(grp["marca"].dropna().unique()),    key=f"{key_prefix}_fm", placeholder="Todas")
+        sel_fam   = f2.multiselect("Familia",  sorted(grp["familia"].dropna().unique()),  key=f"{key_prefix}_ff", placeholder="Todas")
+        sel_rub   = f3.multiselect("Rubro",    sorted(grp["rubro"].dropna().unique()),    key=f"{key_prefix}_fr", placeholder="Todos")
+        sel_sub   = f4.multiselect("Subrubro", sorted(grp["subrubro"].dropna().unique()), key=f"{key_prefix}_fs", placeholder="Todos")
+        t1, t2 = st.columns(2)
+        solo_stock = t1.toggle("📦 Solo con stock",            key=f"{key_prefix}_ts")
+        solo_mov   = t2.toggle("📈 Solo con mov. últimos 6m", key=f"{key_prefix}_tm")
+
+    # ── Aplicar filtros ──────────────────────────────────────────────────────
+    if busq_cod.strip():
+        grp = grp[grp["cod_articulo"].astype(str).str.upper().str.contains(busq_cod.strip().upper(), na=False)]
+    if busq_desc.strip():
+        grp = grp[grp["descripcion"].str.upper().str.contains(busq_desc.strip().upper(), na=False)]
+    if sel_marca: grp = grp[grp["marca"].isin(sel_marca)]
+    if sel_fam:   grp = grp[grp["familia"].isin(sel_fam)]
+    if sel_rub:   grp = grp[grp["rubro"].isin(sel_rub)]
+    if sel_sub:   grp = grp[grp["subrubro"].isin(sel_sub)]
+    if solo_stock: grp = grp[grp["stock"] > 0]
+    if solo_mov:   grp = grp[~grp["__sin_mov"]]
+
+    if grp.empty:
+        st.warning("No hay artículos para los filtros seleccionados.")
+        return
+
+    # ── KPIs ─────────────────────────────────────────────────────────────────
+    ck = st.columns(4)
+    ck[0].metric("📦 Artículos",  f"{len(grp):,}")
+    ck[1].metric("📊 Uds totales", f"{sum(grp[f'__tot_{y}'].sum() for y in años_data):,.0f}")
+    ck[2].metric("💵 Valor stock", fmt_peso(grp["val_stock"].sum()))
+    ck[3].metric("⚠️ Sin mov 6m", f"{grp['__sin_mov'].sum():,}")
 
     st.markdown("---")
 
-    # ── Tabla principal: pivot mensual de unidades ────────────────────────────
-    st.markdown("#### 📋 Artículos — unidades por mes")
-    st.caption("Hacé clic en una fila para ver el detalle del artículo abajo. Stock al 22/05/2025.")
+    # ── Ordenamiento ─────────────────────────────────────────────────────────
+    ord_map = {f"Total {y}": f"__tot_{y}" for y in reversed(años_data)}
+    ord_map.update({"Prom 6m": "__p6", "Stock": "stock", "Valor stock": "val_stock"})
+    ord_sel = st.radio("Ordenar por:", list(ord_map.keys()), horizontal=True, key=f"{key_prefix}_ord")
+    grp = grp.sort_values(ord_map[ord_sel], ascending=False, na_position="last").reset_index(drop=True)
+    grp.insert(0, "#", range(1, len(grp)+1))
 
-    ord_col_art = st.radio("Ordenar por:", ["Unidades", "Facturación", "Clientes", "Stock"],
-                           horizontal=True, key=f"{key_prefix}_art_ord")
-    ord_map_art = {"Unidades": "unidades", "Facturación": "facturacion",
-                   "Clientes": "clientes", "Stock": "stock_actual"}
-    grp_s = grp.sort_values(ord_map_art[ord_col_art], ascending=False,
-                            na_position="last").reset_index(drop=True)
-    grp_s.insert(0, "#", range(1, len(grp_s)+1))
+    # ── Tabla principal ──────────────────────────────────────────────────────
+    tbl = grp[["#","cod_articulo","descripcion","marca","familia","rubro","subrubro"]].rename(columns={
+        "cod_articulo":"Código","descripcion":"Descripción",
+        "marca":"Marca","familia":"Familia","rubro":"Rubro","subrubro":"Subrubro"
+    }).copy()
 
-    # Columnas fijas a mostrar
-    fixed = ["#", "cod_articulo", "descripcion", "marca", "familia", "rubro",
-             "unidades", "facturacion", "clientes"]
-    if df_stock is not None:
-        fixed += ["stock_actual", "meses_stock"]
-    if art_meta["precio_unitario"].notna().any():
-        fixed += ["precio_unitario"]
-    if art_meta["valor_stock"].notna().any():
-        fixed += ["valor_stock"]
-
-    tbl_d = grp_s[[c for c in fixed if c in grp_s.columns] + month_cols].copy()
-    tbl_d["unidades"]    = tbl_d["unidades"].apply(lambda x: f"{x:,.0f}")
-    tbl_d["facturacion"] = tbl_d["facturacion"].apply(fmt_peso)
-    if "stock_actual"    in tbl_d.columns:
-        tbl_d["stock_actual"]   = tbl_d["stock_actual"].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "—")
-    if "meses_stock"     in tbl_d.columns:
-        tbl_d["meses_stock"]    = tbl_d["meses_stock"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
-    if "precio_unitario" in tbl_d.columns:
-        tbl_d["precio_unitario"] = tbl_d["precio_unitario"].apply(lambda x: fmt_peso(x) if pd.notna(x) else "—")
-    if "valor_stock"     in tbl_d.columns:
-        tbl_d["valor_stock"]    = tbl_d["valor_stock"].apply(lambda x: fmt_peso(x) if pd.notna(x) else "—")
     for mc in month_cols:
-        if mc in tbl_d.columns:
-            tbl_d[mc] = tbl_d[mc].apply(lambda x: f"{x:,.0f}" if x > 0 else "—")
+        tbl[mc] = grp[mc].fillna(0).astype(int)
+    for y in años_data:
+        tbl[f"Total {y}"] = grp[f"__tot_{y}"].fillna(0).astype(int)
+    if len(años_data) >= 2:
+        y1, y0 = años_data[-1], años_data[-2]
+        tbl[f"{y1} vs {y0} (%)"] = grp["__var_yoy"]
+    tbl["Prom 12m"] = grp["__p12"]
+    tbl["Prom 6m"]  = grp["__p6"]
+    tbl["Prom 3m"]  = grp["__p3"]
+    if df_stock is not None:
+        tbl["Stock (22/5)"]  = grp["stock"].fillna(0).astype(int)
+        tbl["Meses stock"] = grp["__meses_stk"].apply(
+            lambda x: "—" if x is None or (isinstance(x, float) and pd.isna(x)) else str(x))
+    if precios_map:
+        tbl["Valor stock ($)"] = grp["val_stock"].fillna(0)
+    tbl["SIN MOV 6m"] = grp["__sin_mov"].apply(lambda x: "⚠️" if x else "")
 
-    rename_fixed = {
-        "#": "#", "cod_articulo": "Código", "descripcion": "Descripción",
-        "marca": "Marca", "familia": "Familia", "rubro": "Rubro",
-        "unidades": "Total uds", "facturacion": "Facturación", "clientes": "Clientes",
-        "stock_actual": "Stock", "meses_stock": "Meses stock",
-        "precio_unitario": "Precio lista", "valor_stock": "Valor stock",
-    }
-    tbl_d = tbl_d.rename(columns=rename_fixed)
+    col_cfg = {}
+    for mc in month_cols:
+        col_cfg[mc] = st.column_config.NumberColumn(mc, format="%d", width="small")
+    for y in años_data:
+        col_cfg[f"Total {y}"] = st.column_config.NumberColumn(f"Total {y}", format="%d")
+    if len(años_data) >= 2:
+        col_cfg[f"{y1} vs {y0} (%)"] = st.column_config.NumberColumn(f"{y1} vs {y0} (%)", format="%.1f%%")
+    col_cfg["Prom 12m"] = st.column_config.NumberColumn("Prom 12m", format="%.1f")
+    col_cfg["Prom 6m"]  = st.column_config.NumberColumn("Prom 6m",  format="%.1f")
+    col_cfg["Prom 3m"]  = st.column_config.NumberColumn("Prom 3m",  format="%.1f")
+    if df_stock is not None:
+        col_cfg["Stock (22/5)"] = st.column_config.NumberColumn("Stock (22/5)", format="%d")
+    if precios_map:
+        col_cfg["Valor stock ($)"] = st.column_config.NumberColumn("Valor stock ($)", format="$ %,.0f")
 
     sel_grid = st.dataframe(
-        tbl_d, use_container_width=True, hide_index=True,
-        on_select="rerun", selection_mode="single-row"
+        tbl, use_container_width=True, hide_index=True, height=500,
+        on_select="rerun", selection_mode="single-row",
+        column_config=col_cfg,
     )
-    st.download_button("📥 Descargar tabla",
-                       grp_s.to_csv(index=False).encode("utf-8"),
-                       file_name=f"ventas_articulos_{key_prefix}.csv",
-                       mime="text/csv", key=f"{key_prefix}_art_dl")
+    st.download_button(
+        "📥 Descargar tabla",
+        grp.to_csv(index=False).encode("utf-8"),
+        file_name=f"ventas_articulos_{key_prefix}.csv",
+        mime="text/csv", key=f"{key_prefix}_art_dl",
+    )
 
-    # ── Detalle de artículo ───────────────────────────────────────────────────
+    # ── Composición valorizada ───────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("💰 Composición valorizada por Marca / Familia / Rubro", expanded=False):
+        cv1, cv2, cv3 = st.columns([2, 1, 1])
+        comp_by   = cv1.radio("Agrupar por:", ["Marca","Familia","Rubro"], horizontal=True, key=f"{key_prefix}_cb")
+        años_comp = ["Todos"] + [str(y) for y in años_data]
+        sel_año_c = cv2.selectbox("Año:", años_comp, key=f"{key_prefix}_cay")
+        meses_comp = ["Todos"] + [MESES_FULL[i] for i in range(1,13)]
+        sel_mes_c  = cv3.selectbox("Mes:", meses_comp, key=f"{key_prefix}_cme")
+
+        vf_comp = vdf.copy()
+        if sel_año_c != "Todos":
+            vf_comp = vf_comp[vf_comp["año"] == int(sel_año_c)]
+        if sel_mes_c != "Todos":
+            mes_num = next(k for k, v in MESES_FULL.items() if v == sel_mes_c)
+            vf_comp = vf_comp[vf_comp["mes"] == mes_num]
+        if sel_marca: vf_comp = vf_comp[vf_comp["marca"].isin(sel_marca)]
+        if sel_fam:   vf_comp = vf_comp[vf_comp["familia"].isin(sel_fam)]
+        if sel_rub:   vf_comp = vf_comp[vf_comp["rubro"].isin(sel_rub)]
+
+        if not vf_comp.empty:
+            vf_comp = vf_comp.copy()
+            vf_comp["valor"] = vf_comp["cantidad"] * vf_comp["cod_str"].map(precios_map).fillna(0)
+            usar_valor = bool(precios_map) and vf_comp["valor"].sum() > 0
+            col_val   = "valor" if usar_valor else "facturacion"
+            label_val = "Valor a precio lista ($)" if usar_valor else "Facturación ($)"
+            col_grp_c = comp_by.lower()
+            comp = (
+                vf_comp.groupby(col_grp_c)[col_val].sum()
+                .reset_index(name="total").dropna(subset=[col_grp_c])
+                .pipe(lambda d: d[d["total"] > 0])
+                .sort_values("total", ascending=False)
+            )
+            total_c = comp["total"].sum()
+            comp["pct"] = comp["total"] / total_c * 100
+            cg1, cg2 = st.columns([2,1])
+            with cg1:
+                fig_c = px.bar(comp.head(20), x="pct", y=col_grp_c, orientation="h",
+                               title=f"Composición por {comp_by}",
+                               labels={"pct":"% del total", col_grp_c:""},
+                               text=comp.head(20)["pct"].apply(lambda x: f"{x:.1f}%"),
+                               color_discrete_sequence=["#0066cc"])
+                fig_c.update_traces(textposition="outside")
+                fig_c.update_layout(yaxis={"categoryorder":"total ascending"}, margin=dict(r=100))
+                st.plotly_chart(fig_c, use_container_width=True)
+            with cg2:
+                tbl_c = comp[[col_grp_c,"total","pct"]].copy()
+                tbl_c["total"] = tbl_c["total"].apply(fmt_peso)
+                tbl_c["pct"]   = tbl_c["pct"].apply(lambda x: f"{x:.1f}%")
+                tbl_c.columns  = [comp_by, label_val, "% del total"]
+                st.dataframe(tbl_c, use_container_width=True, hide_index=True)
+
+    # ── Detalle de artículo ──────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("#### 🔍 Detalle de artículo")
     key_art_sel  = f"{key_prefix}_art_selected"
@@ -511,9 +518,10 @@ def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix="
         st.session_state[key_det_busq] = ""
         st.session_state[key_art_sel]  = None
 
-    # Selección desde la grilla
     if sel_grid.selection.rows:
-        st.session_state[key_art_sel] = grp_s.iloc[sel_grid.selection.rows[0]]["cod_articulo"]
+        idx = sel_grid.selection.rows[0]
+        if idx < len(grp):
+            st.session_state[key_art_sel] = grp.iloc[idx]["cod_articulo"]
 
     col_sb, col_cl = st.columns([5, 1])
     with col_cl:
@@ -524,12 +532,11 @@ def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix="
             "Buscar por nombre o código:", placeholder="Ej: DISCO o TDCROA1151",
             key=key_det_busq, label_visibility="collapsed")
 
-    # Búsqueda por texto
     if busq_det.strip():
-        bl_det = busq_det.strip().lower()
-        mask_d = (grp_s["descripcion"].str.lower().str.contains(bl_det, na=False) |
-                  grp_s["cod_articulo"].astype(str).str.lower().str.contains(bl_det, na=False))
-        cands  = grp_s[mask_d].reset_index(drop=True)
+        bl_det = busq_det.strip().upper()
+        mask_d = (grp["descripcion"].str.upper().str.contains(bl_det, na=False) |
+                  grp["cod_articulo"].astype(str).str.upper().str.contains(bl_det, na=False))
+        cands  = grp[mask_d].reset_index(drop=True)
         if cands.empty:
             st.warning(f"No se encontró '{busq_det}'.")
             st.session_state[key_art_sel] = None
@@ -545,28 +552,32 @@ def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix="
     elif not sel_grid.selection.rows:
         st.info("Hacé clic en un artículo de la tabla o buscá por nombre/código para ver el detalle.")
 
-    # ── Mostrar detalle ───────────────────────────────────────────────────────
     cod_art_det = st.session_state.get(key_art_sel)
     if cod_art_det is None:
         return
 
-    art_r = art_meta[art_meta["cod_articulo"] == cod_art_det]
+    art_r = meta[meta["cod_articulo"] == cod_art_det]
     if art_r.empty:
-        art_r = art_meta[art_meta["cod_articulo"].astype(str) == str(cod_art_det)]
+        art_r = meta[meta["cod_articulo"].astype(str) == str(cod_art_det)]
     if art_r.empty:
         return
 
-    r = art_r.iloc[0]
+    r   = art_r.iloc[0]
+    grp_r = grp[grp["cod_articulo"] == cod_art_det]
+    if grp_r.empty:
+        return
+    gr = grp_r.iloc[0]
+
     st.markdown(f"### {r['cod_articulo']} — {r['descripcion']}")
     da_cols = st.columns(4)
-    da_cols[0].metric("Unidades totales", f"{r['unidades']:,.0f}")
-    da_cols[1].metric("Facturación",      fmt_peso(r["facturacion"]))
-    if pd.notna(r.get("stock_actual")):
-        da_cols[2].metric("Stock actual (22/5)", f"{r['stock_actual']:,.0f}")
-    if pd.notna(r.get("meses_stock")):
-        da_cols[3].metric("Meses de stock", f"{r['meses_stock']:.1f}")
+    tot_hist = sum(gr.get(f"__tot_{y}", 0) for y in años_data)
+    da_cols[0].metric("Uds históricas",    f"{tot_hist:,.0f}")
+    da_cols[1].metric("Prom mensual 6m",   f"{gr['__p6']:.1f}")
+    if r["stock"] > 0:
+        da_cols[2].metric("Stock actual (22/5)", f"{int(r['stock']):,}")
+    if gr["__meses_stk"] is not None:
+        da_cols[3].metric("Meses de stock", str(gr["__meses_stk"]))
 
-    # Evolución mensual histórica (sobre todas las ventas, no solo el período filtrado)
     vf_art = ventas_df[ventas_df["cod_articulo"] == cod_art_det].copy()
     if vf_art.empty:
         vf_art = ventas_df[ventas_df["cod_articulo"].astype(str) == str(cod_art_det)].copy()
@@ -578,26 +589,25 @@ def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix="
         clientes   =("cod_cliente", "nunique"),
     ).reset_index().sort_values("periodo")
 
-    prom_uds  = evol["unidades"].mean()
-    prom_fact = evol["facturacion"].mean()
-
+    prom_u = evol["unidades"].mean()
+    prom_f = evol["facturacion"].mean()
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         fig_u = px.bar(evol, x="periodo", y="unidades",
                        title="Unidades por mes (histórico)",
-                       labels={"periodo": "", "unidades": "Unidades"},
+                       labels={"periodo":"","unidades":"Unidades"},
                        color_discrete_sequence=["#0066cc"])
-        fig_u.add_hline(y=prom_uds, line_dash="dash", line_color="orange",
-                        annotation_text=f"Prom: {prom_uds:,.1f}")
+        fig_u.add_hline(y=prom_u, line_dash="dash", line_color="orange",
+                        annotation_text=f"Prom: {prom_u:,.1f}")
         fig_u.update_layout(xaxis_tickformat="%b %Y")
         st.plotly_chart(fig_u, use_container_width=True)
     with col_g2:
         fig_f = px.bar(evol, x="periodo", y="facturacion",
                        title="Facturación por mes (histórico)",
-                       labels={"periodo": "", "facturacion": "Facturación ($)"},
+                       labels={"periodo":"","facturacion":"Facturación ($)"},
                        color_discrete_sequence=["#28a745"])
-        fig_f.add_hline(y=prom_fact, line_dash="dash", line_color="orange",
-                        annotation_text=f"Prom: {fmt_compacto(prom_fact)}")
+        fig_f.add_hline(y=prom_f, line_dash="dash", line_color="orange",
+                        annotation_text=f"Prom: {fmt_compacto(prom_f)}")
         fig_f.update_layout(xaxis_tickformat="%b %Y")
         st.plotly_chart(fig_f, use_container_width=True)
 
@@ -606,25 +616,18 @@ def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix="
     tbl_evol["unidades"]    = tbl_evol["unidades"].apply(lambda x: f"{x:,.0f}")
     tbl_evol["facturacion"] = tbl_evol["facturacion"].apply(fmt_peso)
     tbl_evol["clientes"]    = tbl_evol["clientes"].astype(int)
-    tbl_evol.columns        = ["Período", "Unidades", "Facturación", "Clientes"]
+    tbl_evol.columns        = ["Período","Unidades","Facturación","Clientes"]
     st.dataframe(tbl_evol, use_container_width=True, hide_index=True)
 
-    # ── Ranking de clientes (período filtrado) ────────────────────────────────
     st.markdown("---")
     st.markdown("#### 👥 Clientes que más compran este artículo")
-    st.caption("Período y filtros seleccionados arriba.")
-
-    vf_art_f = vf[vf["cod_articulo"] == cod_art_det]
+    vf_art_f = ventas_df[ventas_df["cod_articulo"] == cod_art_det]
     if vf_art_f.empty:
-        vf_art_f = vf[vf["cod_articulo"].astype(str) == str(cod_art_det)]
-
-    if vf_art_f.empty:
-        st.info("No hay clientes en el período/filtros seleccionados.")
-    else:
-        crit_cli = st.radio("Ordenar por:", ["Unidades", "Facturación"],
+        vf_art_f = ventas_df[ventas_df["cod_articulo"].astype(str) == str(cod_art_det)]
+    if not vf_art_f.empty:
+        crit_cli = st.radio("Ordenar por:", ["Unidades","Facturación"],
                             horizontal=True, key=f"{key_prefix}_art_cli_crit")
         col_cli_ord = "unidades" if crit_cli == "Unidades" else "facturacion"
-
         top_cli = (
             vf_art_f.groupby("cod_cliente").agg(
                 unidades     =("cantidad",    "sum"),
@@ -636,25 +639,23 @@ def tab_ventas_articulos(ventas_df, df_stock=None, df_precios=None, key_prefix="
             .reset_index(drop=True)
         )
         top_cli.insert(0, "#", range(1, len(top_cli)+1))
-
         top10 = top_cli.head(10)
-        fig_cli = px.bar(
-            top10, x=col_cli_ord, y="cliente", orientation="h",
-            title="Top 10 clientes",
-            labels={col_cli_ord: crit_cli, "cliente": ""},
-            color_discrete_sequence=["#0066cc"],
-            text=top10[col_cli_ord].apply(
-                lambda x: f"{x:,.0f}" if crit_cli == "Unidades" else fmt_compacto(x)))
+        fig_cli = px.bar(top10, x=col_cli_ord, y="cliente", orientation="h",
+                         title="Top 10 clientes",
+                         labels={col_cli_ord: crit_cli, "cliente":""},
+                         color_discrete_sequence=["#0066cc"],
+                         text=top10[col_cli_ord].apply(
+                             lambda x: f"{x:,.0f}" if crit_cli=="Unidades" else fmt_compacto(x)))
         fig_cli.update_traces(textposition="outside")
-        fig_cli.update_layout(yaxis={"categoryorder": "total ascending"}, margin=dict(t=40, r=100))
+        fig_cli.update_layout(yaxis={"categoryorder":"total ascending"}, margin=dict(t=40,r=100))
         st.plotly_chart(fig_cli, use_container_width=True)
 
         tbl_cli = top_cli.copy()
         tbl_cli["unidades"]      = tbl_cli["unidades"].apply(lambda x: f"{x:,.0f}")
         tbl_cli["facturacion"]   = tbl_cli["facturacion"].apply(fmt_peso)
         tbl_cli["ultima_compra"] = tbl_cli["ultima_compra"].dt.strftime("%d/%m/%Y")
-        tbl_cli = tbl_cli[["#", "cliente", "unidades", "facturacion", "ultima_compra"]]
-        tbl_cli.columns = ["#", "Cliente", "Unidades", "Facturación", "Última compra"]
+        tbl_cli = tbl_cli[["#","cliente","unidades","facturacion","ultima_compra"]]
+        tbl_cli.columns = ["#","Cliente","Unidades","Facturación","Última compra"]
         st.dataframe(tbl_cli, use_container_width=True, hide_index=True)
         st.download_button(
             "📥 Descargar ranking de clientes",
@@ -786,6 +787,7 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
     dc1, dc2 = st.columns(2)
     dc1.metric("👥 Clientes con compras", n_cli)
     dc2.metric("💰 Facturación total",    fmt_peso(fact_t))
+    st.caption(f"📅 Período aplicado: **{sem_desde.strftime('%d/%m/%Y')}** → **{sem_hasta.strftime('%d/%m/%Y')}**")
 
     cli_det = (
         vf_det.groupby("cod_cliente").agg(
