@@ -30,8 +30,9 @@ def cargar_datos(archivo):
     import io
     raw = bytes(archivo) if isinstance(archivo, (bytes, bytearray)) else archivo.read()
 
-    # Leer TODAS las hojas de una sola vez para evitar múltiples aperturas del archivo
-    todas = pd.read_excel(io.BytesIO(raw), sheet_name=None, engine="openpyxl")
+    # Abrir el archivo una sola vez; parse() lee cada hoja sin reabrir
+    xls = pd.ExcelFile(io.BytesIO(raw), engine="openpyxl")
+    hojas = xls.sheet_names
 
     def _find_col(df, keywords):
         for c in df.columns:
@@ -41,7 +42,7 @@ def cargar_datos(archivo):
         return None
 
     # -- Hoja Ventas --
-    df_v = todas["Ventas"].copy()
+    df_v = xls.parse("Ventas")
     nombres_v = [
         "fecha","periodo","cod_cliente","cliente","cod_vendedor","vendedor",
         "cbte","t_cbte","pto_vta","n_cbte","cod_articulo","descripcion",
@@ -58,7 +59,7 @@ def cargar_datos(archivo):
     df_v["cod_cliente"]  = pd.to_numeric(df_v["cod_cliente"],  errors="coerce")
 
     # -- Hoja Base clientes --
-    df_b = todas["Base clientes"].copy()
+    df_b = xls.parse("Base clientes")
     df_b.columns = [str(c).strip() for c in df_b.columns]
     df_b = df_b.rename(columns={
         "Código":          "cod_cliente",
@@ -86,32 +87,39 @@ def cargar_datos(archivo):
         .pipe(pd.to_numeric, errors="coerce")
     )
 
-    # -- Hojas Stock y Precios (detección automática entre las hojas ya cargadas) --
+    # -- Hojas Stock y Precios (detección automática) --
     df_stock = None
     df_precios = None
 
-    for nombre, df_h in todas.items():
-        hn = nombre.lower()
-        df_h = df_h.copy()
-        df_h.columns = [str(c).strip() for c in df_h.columns]
-
+    for h in hojas:
+        hn = h.lower()
         if df_stock is None and ("stock" in hn or "existencia" in hn):
-            cc = _find_col(df_h, ["cod", "código", "codigo", "articulo", "art"])
-            cs = _find_col(df_h, ["stock", "cantidad", "existencia", "saldo", "unid"])
-            if cc and cs:
-                df_h = df_h.rename(columns={cc: "cod_articulo", cs: "stock_actual"})
-                df_h["cod_articulo"] = df_h["cod_articulo"].astype(str).str.strip()
-                df_h["stock_actual"] = pd.to_numeric(df_h["stock_actual"], errors="coerce").fillna(0)
-                df_stock = df_h[["cod_articulo","stock_actual"]].dropna(subset=["cod_articulo"]).copy()
+            try:
+                ds = xls.parse(h)
+                ds.columns = [str(c).strip() for c in ds.columns]
+                cc = _find_col(ds, ["cod", "código", "codigo", "articulo", "art"])
+                cs = _find_col(ds, ["stock", "cantidad", "existencia", "saldo", "unid"])
+                if cc and cs:
+                    ds = ds.rename(columns={cc: "cod_articulo", cs: "stock_actual"})
+                    ds["cod_articulo"] = ds["cod_articulo"].astype(str).str.strip()
+                    ds["stock_actual"] = pd.to_numeric(ds["stock_actual"], errors="coerce").fillna(0)
+                    df_stock = ds[["cod_articulo","stock_actual"]].dropna(subset=["cod_articulo"]).copy()
+            except Exception:
+                pass
 
         if df_precios is None and any(k in hn for k in ["precio", "lista", "costo"]):
-            cc = _find_col(df_h, ["cod", "código", "codigo", "articulo", "art"])
-            cp = _find_col(df_h, ["precio", "costo", "lista", "unitario", "valor"])
-            if cc and cp:
-                df_h = df_h.rename(columns={cc: "cod_articulo", cp: "precio_unitario"})
-                df_h["cod_articulo"]    = df_h["cod_articulo"].astype(str).str.strip()
-                df_h["precio_unitario"] = pd.to_numeric(df_h["precio_unitario"], errors="coerce").fillna(0)
-                df_precios = df_h[["cod_articulo","precio_unitario"]].dropna(subset=["cod_articulo"]).copy()
+            try:
+                dp = xls.parse(h)
+                dp.columns = [str(c).strip() for c in dp.columns]
+                cc = _find_col(dp, ["cod", "código", "codigo", "articulo", "art"])
+                cp = _find_col(dp, ["precio", "costo", "lista", "unitario", "valor"])
+                if cc and cp:
+                    dp = dp.rename(columns={cc: "cod_articulo", cp: "precio_unitario"})
+                    dp["cod_articulo"]    = dp["cod_articulo"].astype(str).str.strip()
+                    dp["precio_unitario"] = pd.to_numeric(dp["precio_unitario"], errors="coerce").fillna(0)
+                    df_precios = dp[["cod_articulo","precio_unitario"]].dropna(subset=["cod_articulo"]).copy()
+            except Exception:
+                pass
 
     return df_v, df_b, df_stock, df_precios
 
