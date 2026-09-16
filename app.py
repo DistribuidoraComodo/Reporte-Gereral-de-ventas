@@ -1598,17 +1598,9 @@ if rol == "Vendedor":
             else:
                 sin_base_info.append({"cod_cliente": cod, "razon_social": nombre_cli,
                                       "vendedor_actual": "Sin registro en base", "facturacion": fact_hist})
-
-        # Igual los agregamos a base_v para que aparezcan en el resumen
-        extra_cli = (
-            ventas_v[ventas_v["cod_cliente"].isin(cods_extra)]
-            [["cod_cliente","cliente","localidad","provincia"]]
-            .drop_duplicates("cod_cliente")
-            .rename(columns={"cliente": "razon_social"})
-        )
-        extra_cli["cod_vendedor"]      = cod_sel
-        extra_cli["vendedor_asignado"] = vendedor_sel
-        base_v = pd.concat([base_v, extra_cli], ignore_index=True)
+        # No se agregan a base_v: ya no son clientes asignados a este vendedor.
+        # Quedan visibles solo en el cartel de "clientes con ventas históricas" de abajo,
+        # para que Activos/Inactivos/Sin compras coincidan siempre con "Clientes asignados".
 
     nombre_limpio = vendedor_sel.split(")")[-1].strip() if ")" in vendedor_sel else vendedor_sel
 
