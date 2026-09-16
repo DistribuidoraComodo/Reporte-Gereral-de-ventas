@@ -2016,12 +2016,12 @@ elif rol == "Gerencia":
 
     st.divider()
 
-    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente","⚖️ Comparar períodos","🆕 Altas de clientes"]
+    tab_labels_g = ["👥 Ranking","📅 Mensual","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente","⚖️ Comparar períodos","🆕 Altas de clientes"]
     if df_coords is not None:
         tab_labels_g.append("🗺️ Mapa")
     tabs_g = st.tabs(tab_labels_g)
-    t_rank, t_mens, t_evol, t_marc_g, t_mix_g, t_sem_g, t_tipo_g, t_comp_g, t_altas_g = tabs_g[:9]
-    t_mapa = tabs_g[9] if df_coords is not None else None
+    t_rank, t_mens, t_marc_g, t_mix_g, t_sem_g, t_tipo_g, t_comp_g, t_altas_g = tabs_g[:8]
+    t_mapa = tabs_g[8] if df_coords is not None else None
 
     with t_rank:
         # Usar el vendedor de la hoja Ventas (quien realmente vendió), no la asignación de la base.
@@ -2124,28 +2124,6 @@ elif rol == "Gerencia":
             tabla_vm[col] = tabla_vm[col].apply(fmt_peso)
         tabla_vm = tabla_vm.reset_index().rename(columns={"vendedor": "Vendedor"})
         st.dataframe(tabla_vm, use_container_width=True, hide_index=True)
-
-    with t_evol:
-        evol_t = ventas_g.groupby(["año","mes"])["facturacion"].sum().reset_index()
-        evol_t["periodo"] = pd.to_datetime(
-            evol_t["año"].astype(str)+"-"+evol_t["mes"].astype(str).str.zfill(2)+"-01"
-        )
-        fig = px.line(evol_t.sort_values("periodo"), x="periodo", y="facturacion",
-                      title="Evolución mensual total",
-                      labels={"periodo":"","facturacion":"Facturación ($)"},
-                      markers=True, color_discrete_sequence=["#0066cc"])
-        fig.update_layout(xaxis_tickformat="%b %Y", hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
-
-        evol_v = (
-            ventas_rank[ventas_rank["año"]==año_act]
-            .groupby(["mes","vendedor"])["facturacion"].sum().reset_index()
-        )
-        fig2 = px.bar(evol_v, x="mes", y="facturacion", color="vendedor",
-                      title=f"Facturación mensual por vendedor — {año_act}",
-                      labels={"mes":"Mes","facturacion":"Facturación ($)","vendedor":"Vendedor"})
-        fig2.update_layout(xaxis=dict(tickmode="array", tickvals=list(range(1,13)), ticktext=MESES))
-        st.plotly_chart(fig2, use_container_width=True)
 
     with t_marc_g:
         tab_analisis_marcas(ventas_g, base_g, key_prefix="ger", vendedores_disponibles=todos_vend)
