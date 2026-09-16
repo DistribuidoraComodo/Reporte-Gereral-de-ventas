@@ -1364,16 +1364,6 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
         return
 
     st.markdown("---")
-    st.markdown("#### Altas por vendedor y mes")
-    pivot = df_rango.groupby(["vendedor_asignado", "periodo_alta"]).size().reset_index(name="altas")
-    fig2 = px.bar(
-        pivot.sort_values("periodo_alta"), x="periodo_alta", y="altas", color="vendedor_asignado",
-        title="Altas por vendedor y mes",
-        labels={"periodo_alta": "", "altas": "Clientes nuevos", "vendedor_asignado": "Vendedor"},
-    )
-    fig2.update_layout(xaxis_tickformat="%b %Y", barmode="stack")
-    st.plotly_chart(fig2, use_container_width=True)
-
     st.markdown("#### Altas por vendedor y mes (período seleccionado)")
     st.caption("Hacé clic en una celda para ver el detalle de clientes.")
     pivot_conteo = (
