@@ -188,7 +188,7 @@ def cargar_datos(archivo):
                 ds = xls.parse(h)
                 ds.columns = [str(c).strip() for c in ds.columns]
                 cc = _find_col(ds, ["cod", "código", "codigo", "articulo", "art"])
-                cs = _find_col(ds, ["stock", "cantidad", "existencia", "saldo", "unid"])
+                cs = _find_col(ds, ["stock", "cantidad", "existencia", "saldo", "unid", "disponible"])
                 if cc and cs:
                     ds = ds.rename(columns={cc: "cod_articulo", cs: "stock_actual"})
                     ds["cod_articulo"] = (ds["cod_articulo"].astype(str).str.strip()

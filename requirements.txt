@@ -4,4 +4,3 @@ plotly
 openpyxl
 python-calamine
 requests
-gdown
