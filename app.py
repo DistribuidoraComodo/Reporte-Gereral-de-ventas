@@ -58,34 +58,58 @@ def cargar_datos(archivo):
     df_v["cod_vendedor"] = pd.to_numeric(df_v["cod_vendedor"], errors="coerce")
     df_v["cod_cliente"]  = pd.to_numeric(df_v["cod_cliente"],  errors="coerce")
 
-    # -- Hoja Base clientes --
-    df_b = xls.parse("Base clientes")
-    df_b.columns = [str(c).strip() for c in df_b.columns]
-    df_b = df_b.rename(columns={
-        "Código":          "cod_cliente",
-        "Razón Social":    "razon_social",
-        "Nombre":          "nombre_fantasia",
-        "Vendedor":        "vendedor_asignado",
-        "Localidad":       "localidad",
-        "Provincia":       "provincia",
-        "Mail":            "mail",
-        "Telefono":        "telefono",
-        "Clasificacion":   "clasificacion",
-        "SubClasificacion":"subclasificacion",
-        "Zona":            "zona",
-        "Fechaalta":       "fecha_alta",
-        "Fechabaja":       "fecha_baja",
-    })
-    df_b["cod_cliente"] = pd.to_numeric(df_b["cod_cliente"], errors="coerce")
-    df_b = df_b.dropna(subset=["cod_cliente"])
-    if "fecha_alta" in df_b.columns:
-        df_b["fecha_alta"] = pd.to_datetime(df_b["fecha_alta"], errors="coerce")
-    df_b["cod_vendedor"] = (
-        df_b["vendedor_asignado"]
-        .str.extract(r'\((\d+)\)')
-        .squeeze()
-        .pipe(pd.to_numeric, errors="coerce")
-    )
+    # -- Hoja(s) Base clientes --
+    def _procesar_base(df_b, estado_base):
+        df_b = df_b.copy()
+        df_b.columns = [str(c).strip() for c in df_b.columns]
+        df_b = df_b.rename(columns={
+            "Código":          "cod_cliente",
+            "Razón Social":    "razon_social",
+            "Nombre":          "nombre_fantasia",
+            "Vendedor":        "vendedor_asignado",
+            "Localidad":       "localidad",
+            "Provincia":       "provincia",
+            "Mail":            "mail",
+            "Telefono":        "telefono",
+            "Clasificacion":   "clasificacion",
+            "SubClasificacion":"subclasificacion",
+            "Zona":            "zona",
+            "Fechaalta":       "fecha_alta",
+            "Fechabaja":       "fecha_baja",
+        })
+        df_b["cod_cliente"] = pd.to_numeric(df_b["cod_cliente"], errors="coerce")
+        df_b = df_b.dropna(subset=["cod_cliente"])
+        if "fecha_alta" in df_b.columns:
+            df_b["fecha_alta"] = pd.to_datetime(df_b["fecha_alta"], errors="coerce")
+        if "fecha_baja" in df_b.columns:
+            df_b["fecha_baja"] = pd.to_datetime(df_b["fecha_baja"], errors="coerce")
+        df_b["cod_vendedor"] = (
+            df_b["vendedor_asignado"]
+            .str.extract(r'\((\d+)\)')
+            .squeeze()
+            .pipe(pd.to_numeric, errors="coerce")
+        )
+        df_b["estado_base"] = estado_base
+        return df_b
+
+    hoja_activos, hoja_baja = None, None
+    for h in hojas:
+        hn = h.lower().replace(" ", "")
+        if "base" in hn and "client" in hn:
+            if "baja" in hn or "susp" in hn:
+                hoja_baja = h
+            else:
+                hoja_activos = h
+
+    bases = []
+    if hoja_activos:
+        bases.append(_procesar_base(xls.parse(hoja_activos), "activo"))
+    if hoja_baja:
+        bases.append(_procesar_base(xls.parse(hoja_baja), "baja_susp"))
+    if not bases:
+        # Compatibilidad con formato anterior de una sola hoja "Base clientes"
+        bases.append(_procesar_base(xls.parse("Base clientes"), "activo"))
+    df_b = pd.concat(bases, ignore_index=True)
 
     # -- Hoja Base artículos (descripción limpia, sin lote) --
     df_art = None
@@ -1562,9 +1586,16 @@ df_coords = cargar_coords(archivo_coords) if archivo_coords else None
 # ── Filtros globales de clasificación (sidebar) ───────────────────────────────
 with st.sidebar:
     st.markdown("---")
+    ver_baja_susp = st.checkbox(
+        "Ver clientes dados de baja o suspendidos",
+        value=False,
+        key="ver_baja_susp",
+    )
     st.markdown("**🔽 Filtrar por tipo de cliente:**")
 
-    clasif_opts = sorted(df_base["clasificacion"].dropna().unique().tolist())
+    df_base_activa = df_base if ver_baja_susp else df_base[df_base["estado_base"] == "activo"]
+
+    clasif_opts = sorted(df_base_activa["clasificacion"].dropna().unique().tolist())
     sel_clasif = st.multiselect(
         "Clasificación:",
         options=clasif_opts,
@@ -1575,9 +1606,9 @@ with st.sidebar:
 
     # Subclasificación dinámica según clasificación elegida
     if sel_clasif:
-        base_para_sub = df_base[df_base["clasificacion"].isin(sel_clasif)]
+        base_para_sub = df_base_activa[df_base_activa["clasificacion"].isin(sel_clasif)]
     else:
-        base_para_sub = df_base
+        base_para_sub = df_base_activa
     subclasif_opts = sorted(base_para_sub["subclasificacion"].dropna().unique().tolist())
     sel_subclasif = st.multiselect(
         "Subclasificación:",
@@ -1588,7 +1619,7 @@ with st.sidebar:
     )
 
 # Aplicar filtros a la base de clientes (afecta TODOS los análisis)
-df_base_filtrada = df_base.copy()
+df_base_filtrada = df_base_activa.copy()
 if sel_clasif:
     df_base_filtrada = df_base_filtrada[df_base_filtrada["clasificacion"].isin(sel_clasif)]
 if sel_subclasif:
@@ -1600,6 +1631,7 @@ df_ventas_filtrada = df_ventas[df_ventas["cod_cliente"].isin(clientes_filtrados)
 
 # Mostrar badge de filtros activos
 filtros_activos = []
+if ver_baja_susp:  filtros_activos.append("Incluye baja/susp")
 if sel_clasif:     filtros_activos.append(f"Clasif: {', '.join(sel_clasif)}")
 if sel_subclasif:  filtros_activos.append(f"Subclasif: {', '.join(sel_subclasif)}")
 if filtros_activos:
