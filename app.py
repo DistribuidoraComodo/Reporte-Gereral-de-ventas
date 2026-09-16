@@ -1520,6 +1520,7 @@ with st.sidebar:
 
 df_ventas, df_base, df_stock, df_precios, df_articulos = cargar_datos(archivo)
 hoy = df_ventas["fecha"].max()
+hoy_real = pd.Timestamp.now().normalize()
 df_coords = cargar_coords(archivo_coords) if archivo_coords else None
 
 # ── Filtros globales de clasificación (sidebar) ───────────────────────────────
@@ -1690,7 +1691,7 @@ if rol == "Vendedor":
         format="%d días", key="v_dias_umbral"
     )
 
-    resumen = resumen_clientes(base_v, ventas_v, hoy.strftime("%Y-%m-%d"))
+    resumen = resumen_clientes(base_v, ventas_v, hoy_real.strftime("%Y-%m-%d"))
     # Recalcular estado según umbral elegido por el vendedor
     resumen["estado"] = resumen["dias_sin_compra"].apply(
         lambda d: "SIN COMPRAS" if d == 9999 else ("ACTIVO" if d <= dias_umbral else "INACTIVO")
@@ -2159,7 +2160,7 @@ elif rol == "Gerencia":
                 vends_mapa = sorted(base_g["vendedor_asignado"].dropna().unique().tolist())
                 sel_vend_mapa = st.multiselect("Vendedores en mapa:", vends_mapa, default=[], placeholder="Todos", key="gmap_vend")
 
-            resumen_g_full = resumen_clientes(base_g, ventas_g, hoy.strftime("%Y-%m-%d"))
+            resumen_g_full = resumen_clientes(base_g, ventas_g, hoy_real.strftime("%Y-%m-%d"))
             resumen_g_full = resumen_g_full.merge(
                 base_g[["cod_cliente","vendedor_asignado"]].drop_duplicates("cod_cliente"), on="cod_cliente", how="left")
 
