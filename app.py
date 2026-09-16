@@ -1672,12 +1672,12 @@ if rol == "Vendedor":
     st.divider()
 
     # Tabs
-    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente", "🧩 Tipo de cliente", "⚖️ Comparar períodos", "🆕 Altas de clientes"]
+    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "🏷️ Análisis de marcas", "🔍 Mix por cliente", "🧩 Tipo de cliente", "⚖️ Comparar períodos", "🆕 Altas de clientes"]
     if df_coords is not None:
         tab_labels.append("🗺️ Mapa")
     tab_objs = st.tabs(tab_labels)
-    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v, tab_tipo_v, tab_comp_v, tab_altas_v = tab_objs[:9]
-    tab_map_v = tab_objs[9] if df_coords is not None else None
+    tab_cli, tab_inact, tab_mens, tab_marcas_v, tab_mix_v, tab_tipo_v, tab_comp_v, tab_altas_v = tab_objs[:8]
+    tab_map_v = tab_objs[8] if df_coords is not None else None
 
     with tab_cli:
         filtro = st.segmented_control(
@@ -1789,26 +1789,6 @@ if rol == "Vendedor":
                      color_discrete_sequence=px.colors.qualitative.Set1)
         fig.update_layout(xaxis=dict(tickmode="array", tickvals=list(range(1,13)), ticktext=MESES))
         st.plotly_chart(fig, use_container_width=True)
-
-    with tab_graf:
-        evol2 = ventas_v.groupby(["año","mes"])["facturacion"].sum().reset_index()
-        evol2["periodo"] = pd.to_datetime(
-            evol2["año"].astype(str)+"-"+evol2["mes"].astype(str).str.zfill(2)+"-01"
-        )
-        fig = px.bar(evol2.sort_values("periodo"), x="periodo", y="facturacion",
-                     title="Facturación mensual (histórico)",
-                     labels={"periodo":"","facturacion":"Facturación ($)"},
-                     color_discrete_sequence=["#0066cc"])
-        fig.update_layout(xaxis_tickformat="%b %Y")
-        st.plotly_chart(fig, use_container_width=True)
-
-        top10 = resumen[resumen["fact_año"]>0].nlargest(10,"fact_año")[["cliente","fact_año"]].copy()
-        fig2 = px.bar(top10, x="fact_año", y="cliente", orientation="h",
-                      title="Top 10 clientes — facturación año actual",
-                      labels={"fact_año":"Facturación ($)","cliente":""},
-                      color_discrete_sequence=["#0066cc"])
-        fig2.update_layout(yaxis={"categoryorder":"total ascending"})
-        st.plotly_chart(fig2, use_container_width=True)
 
     with tab_marcas_v:
         tab_analisis_marcas(ventas_v, base_v, key_prefix="vend")
