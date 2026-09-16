@@ -787,56 +787,14 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
         st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
         return
 
-    # ── Buscador con botón limpiar ────────────────────────────────────────────
+    # ── Buscador de cliente (un solo desplegable con búsqueda incorporada) ─────
     st.markdown("#### 🔍 Buscar cliente")
-    key_busq = f"{key_prefix}_busq_cli"
-
-    def _limpiar_busq():
-        st.session_state[key_busq] = ""
-
-    col_inp, col_btn = st.columns([5, 1])
-    with col_btn:
-        st.button("🗑️ Limpiar", key=f"{key_prefix}_limpiar",
-                  on_click=_limpiar_busq, use_container_width=True)
-    with col_inp:
-        busqueda = st.text_input("Nombre o código:", placeholder="Ej: GARCIA o 7088",
-                                 key=key_busq, label_visibility="collapsed")
-
-    if not busqueda or not busqueda.strip():
-        st.info("Ingresá el nombre o código del cliente para ver su análisis.")
-        return
-
-    # ── Búsqueda en base y ventas ─────────────────────────────────────────────
-    busqueda_lower = busqueda.strip().lower()
     cols_base = ["cod_cliente", "razon_social", "vendedor_asignado"]
     for col in ["nombre_fantasia", "fecha_alta"]:
         if col in base_df.columns:
             cols_base.append(col)
 
-    mask = base_df["cod_cliente"].astype(str).str.contains(busqueda_lower, na=False)
-    for col in ["razon_social", "nombre_fantasia"]:
-        if col in base_df.columns:
-            mask |= base_df[col].fillna("").str.lower().str.contains(busqueda_lower, na=False)
-
-    candidatos = base_df[mask][cols_base].drop_duplicates("cod_cliente").copy()
-
-    # También buscar en la hoja de ventas
-    mask_v = (
-        ventas_df["cliente"].fillna("").str.lower().str.contains(busqueda_lower, na=False) |
-        ventas_df["cod_cliente"].astype(str).str.contains(busqueda_lower, na=False)
-    )
-    cods_en_ventas = ventas_df[mask_v]["cod_cliente"].dropna().unique()
-    cods_ya = set(candidatos["cod_cliente"].tolist())
-    for cod in cods_en_ventas:
-        if cod not in cods_ya:
-            nombre_v = ventas_df[ventas_df["cod_cliente"] == cod]["cliente"].dropna()
-            nombre_v = nombre_v.iloc[0] if not nombre_v.empty else str(cod)
-            extra_row = {"cod_cliente": cod, "razon_social": nombre_v, "vendedor_asignado": "-"}
-            candidatos = pd.concat([candidatos, pd.DataFrame([extra_row])], ignore_index=True)
-
-    if candidatos.empty:
-        st.warning(f"No se encontró ningún cliente con '{busqueda}'.")
-        return
+    candidatos = base_df[cols_base].drop_duplicates("cod_cliente").copy()
 
     # Nombre a mostrar: razon_social → nombre_fantasia → cod_cliente
     def _nombre(row):
@@ -847,19 +805,24 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
         return f"(cód. {int(row['cod_cliente'])})"
 
     candidatos["_display"] = candidatos.apply(_nombre, axis=1)
+    candidatos["_opcion"] = candidatos.apply(
+        lambda r: f"{r['_display']} — {int(r['cod_cliente'])}", axis=1
+    )
     candidatos = candidatos.sort_values("_display").reset_index(drop=True)
 
-    st.caption(f"Se encontraron **{len(candidatos)}** cliente(s)")
-
-    # Selectbox por índice — evita bugs cuando hay nombres repetidos
-    # La key cambia con la búsqueda para resetear la selección al buscar algo nuevo
     sel_idx = st.selectbox(
-        "Seleccioná el cliente:",
+        "Nombre o código:",
         options=list(range(len(candidatos))),
-        format_func=lambda i: candidatos.iloc[i]["_display"],
-        key=f"{key_prefix}_sel_cli_{busqueda_lower[:20]}"
+        format_func=lambda i: candidatos.iloc[i]["_opcion"],
+        index=None,
+        placeholder="Escribí para buscar un cliente...",
+        key=f"{key_prefix}_sel_cli",
     )
-    cod_cli   = candidatos.iloc[sel_idx]["cod_cliente"]
+    if sel_idx is None:
+        st.info("Buscá y seleccioná un cliente para ver su análisis.")
+        return
+
+    cod_cli    = candidatos.iloc[sel_idx]["cod_cliente"]
     sel_nombre = candidatos.iloc[sel_idx]["_display"]
 
     # Ventas del cliente en el período seleccionado
@@ -1036,73 +999,64 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
     # ── Detalle mes a mes por artículo ──
     st.markdown("---")
     st.markdown("#### 🔍 Detalle por artículo (mes a mes)")
-    st.caption("Buscá un artículo específico para ver su evolución mensual.")
-    busq_art = st.text_input("Artículo (nombre o código):", placeholder="Ej: TORNILLO o 00345",
-                              key=f"{key_prefix}_busq_art")
+    arts_disponibles = ventas_filt[["cod_articulo", "descripcion"]].drop_duplicates("cod_articulo").copy()
+    arts_disponibles["_opcion"] = arts_disponibles.apply(
+        lambda r: f"{r['cod_articulo']} — {r['descripcion']}", axis=1
+    )
+    arts_disponibles = arts_disponibles.sort_values("descripcion").reset_index(drop=True)
 
-    if busq_art:
-        busq_art_lower = busq_art.strip().lower()
-        mask_art = (
-            ventas_filt["descripcion"].str.lower().str.contains(busq_art_lower, na=False) |
-            ventas_filt["cod_articulo"].astype(str).str.lower().str.contains(busq_art_lower, na=False)
-        )
-        ventas_art = ventas_filt[mask_art]
+    idx_art = st.selectbox(
+        "Artículo (nombre o código):",
+        options=list(range(len(arts_disponibles))),
+        format_func=lambda i: arts_disponibles.iloc[i]["_opcion"],
+        index=None,
+        placeholder="Escribí para buscar un artículo...",
+        key=f"{key_prefix}_sel_art",
+    )
 
-        if ventas_art.empty:
-            st.warning(f"No se encontró '{busq_art}' en las compras del período con los filtros aplicados.")
-        else:
-            arts_encontrados = ventas_art[["cod_articulo","descripcion"]].drop_duplicates("cod_articulo")
-            if len(arts_encontrados) > 1:
-                opciones_art = arts_encontrados.apply(
-                    lambda r: f"{r['cod_articulo']} — {r['descripcion']}", axis=1).tolist()
-                sel_art = st.selectbox("Seleccioná el artículo:", opciones_art,
-                                       key=f"{key_prefix}_sel_art")
-                idx_art = opciones_art.index(sel_art)
-                cod_art_sel = arts_encontrados.iloc[idx_art]["cod_articulo"]
-                desc_art    = arts_encontrados.iloc[idx_art]["descripcion"]
-                ventas_art  = ventas_art[ventas_art["cod_articulo"] == cod_art_sel]
-            else:
-                cod_art_sel = arts_encontrados.iloc[0]["cod_articulo"]
-                desc_art    = arts_encontrados.iloc[0]["descripcion"]
+    if idx_art is not None:
+        cod_art_sel = arts_disponibles.iloc[idx_art]["cod_articulo"]
+        desc_art    = arts_disponibles.iloc[idx_art]["descripcion"]
+        ventas_art  = ventas_filt[ventas_filt["cod_articulo"] == cod_art_sel]
 
-            st.markdown(f"**{cod_art_sel} — {desc_art}**")
+        st.markdown(f"**{cod_art_sel} — {desc_art}**")
 
-            art_mensual = ventas_art.groupby(["año","mes"]).agg(
-                cantidad=("cantidad","sum"),
-                facturacion=("facturacion","sum")
-            ).reset_index()
-            art_mensual["periodo"] = pd.to_datetime(
-                art_mensual["año"].astype(str) + "-" + art_mensual["mes"].astype(str).str.zfill(2) + "-01")
-            art_mensual = art_mensual.sort_values("periodo")
+        art_mensual = ventas_art.groupby(["año","mes"]).agg(
+            cantidad=("cantidad","sum"),
+            facturacion=("facturacion","sum")
+        ).reset_index()
+        art_mensual["periodo"] = pd.to_datetime(
+            art_mensual["año"].astype(str) + "-" + art_mensual["mes"].astype(str).str.zfill(2) + "-01")
+        art_mensual = art_mensual.sort_values("periodo")
 
-            ka1, ka2, ka3 = st.columns(3)
-            ka1.metric("Unidades totales",  f"{art_mensual['cantidad'].sum():,.0f}")
-            ka2.metric("Facturación total", fmt_peso(art_mensual["facturacion"].sum()))
-            ka3.metric("Meses con compra",  len(art_mensual))
+        ka1, ka2, ka3 = st.columns(3)
+        ka1.metric("Unidades totales",  f"{art_mensual['cantidad'].sum():,.0f}")
+        ka2.metric("Facturación total", fmt_peso(art_mensual["facturacion"].sum()))
+        ka3.metric("Meses con compra",  len(art_mensual))
 
-            col_art1, col_art2 = st.columns(2)
-            with col_art1:
-                fig_art = px.bar(art_mensual, x="periodo", y="cantidad",
-                                 title="Cantidad mensual",
-                                 labels={"periodo": "", "cantidad": "Cantidad"},
-                                 color_discrete_sequence=["#0066cc"])
-                fig_art.update_layout(xaxis_tickformat="%b %Y")
-                st.plotly_chart(fig_art, use_container_width=True)
-            with col_art2:
-                fig_art2 = px.bar(art_mensual, x="periodo", y="facturacion",
-                                  title="Facturación mensual",
-                                  labels={"periodo": "", "facturacion": "Facturación ($)"},
-                                  color_discrete_sequence=["#28a745"])
-                fig_art2.update_layout(xaxis_tickformat="%b %Y")
-                st.plotly_chart(fig_art2, use_container_width=True)
+        col_art1, col_art2 = st.columns(2)
+        with col_art1:
+            fig_art = px.bar(art_mensual, x="periodo", y="cantidad",
+                             title="Cantidad mensual",
+                             labels={"periodo": "", "cantidad": "Cantidad"},
+                             color_discrete_sequence=["#0066cc"])
+            fig_art.update_layout(xaxis_tickformat="%b %Y")
+            st.plotly_chart(fig_art, use_container_width=True)
+        with col_art2:
+            fig_art2 = px.bar(art_mensual, x="periodo", y="facturacion",
+                              title="Facturación mensual",
+                              labels={"periodo": "", "facturacion": "Facturación ($)"},
+                              color_discrete_sequence=["#28a745"])
+            fig_art2.update_layout(xaxis_tickformat="%b %Y")
+            st.plotly_chart(fig_art2, use_container_width=True)
 
-            tbl_art = art_mensual.copy()
-            tbl_art["periodo"]     = tbl_art["periodo"].dt.strftime("%b %Y")
-            tbl_art["cantidad"]    = tbl_art["cantidad"].apply(lambda x: f"{x:,.0f}")
-            tbl_art["facturacion"] = tbl_art["facturacion"].apply(fmt_peso)
-            tbl_art = tbl_art[["periodo","cantidad","facturacion"]]
-            tbl_art.columns = ["Período","Cantidad","Facturación"]
-            st.dataframe(tbl_art, use_container_width=True, hide_index=True)
+        tbl_art = art_mensual.copy()
+        tbl_art["periodo"]     = tbl_art["periodo"].dt.strftime("%b %Y")
+        tbl_art["cantidad"]    = tbl_art["cantidad"].apply(lambda x: f"{x:,.0f}")
+        tbl_art["facturacion"] = tbl_art["facturacion"].apply(fmt_peso)
+        tbl_art = tbl_art[["periodo","cantidad","facturacion"]]
+        tbl_art.columns = ["Período","Cantidad","Facturación"]
+        st.dataframe(tbl_art, use_container_width=True, hide_index=True)
 
 
 def tab_analisis_tipo_cliente(ventas_df, base_df, key_prefix=""):
