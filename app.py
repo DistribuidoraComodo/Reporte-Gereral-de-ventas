@@ -1184,6 +1184,107 @@ def tab_analisis_tipo_cliente(ventas_df, base_df, key_prefix=""):
     st.dataframe(top_cli, use_container_width=True, hide_index=True)
 
 
+def tab_comparador_periodos(ventas_df, base_df, key_prefix=""):
+    """Compara facturación entre dos trimestres o cuatrimestres, cruzado por una dimensión."""
+    col_g1, col_g2 = st.columns([1, 3])
+    with col_g1:
+        granularidad = st.radio(
+            "Granularidad:", ["Trimestre", "Cuatrimestre"],
+            key=f"{key_prefix}_gran", horizontal=True,
+        )
+
+    df = ventas_df.copy()
+    if granularidad == "Trimestre":
+        df["n_periodo"] = (df["mes"] - 1) // 3 + 1
+        df["periodo_label"] = "Q" + df["n_periodo"].astype(str) + " " + df["año"].astype(str)
+    else:
+        df["n_periodo"] = (df["mes"] - 1) // 4 + 1
+        df["periodo_label"] = "C" + df["n_periodo"].astype(str) + " " + df["año"].astype(str)
+
+    periodos = (
+        df[["año", "n_periodo", "periodo_label"]].drop_duplicates()
+        .sort_values(["año", "n_periodo"])
+    )
+    labels = periodos["periodo_label"].tolist()
+    if len(labels) < 2:
+        st.info("No hay suficientes períodos con datos para comparar.")
+        return
+
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        periodo_a = st.selectbox("Período A:", labels, index=len(labels) - 2, key=f"{key_prefix}_pa")
+    with col_p2:
+        periodo_b = st.selectbox("Período B:", labels, index=len(labels) - 1, key=f"{key_prefix}_pb")
+
+    dim_sel = st.selectbox(
+        "Cruzar por:",
+        ["Vendedor", "Cliente", "Marca", "Tipo de cliente", "Subclasificación", "Marcas estratégicas"],
+        key=f"{key_prefix}_dim",
+    )
+
+    df_a = df[df["periodo_label"] == periodo_a].copy()
+    df_b = df[df["periodo_label"] == periodo_b].copy()
+
+    if dim_sel == "Tipo de cliente":
+        tipo_map = base_df[["cod_cliente", "tipo_cliente"]].dropna(subset=["tipo_cliente"]).drop_duplicates("cod_cliente")
+        df_a = df_a.merge(tipo_map, on="cod_cliente", how="inner")
+        df_b = df_b.merge(tipo_map, on="cod_cliente", how="inner")
+        col_dim = "tipo_cliente"
+    elif dim_sel == "Marcas estratégicas":
+        df_a["marca_estrategica"] = df_a["marca"].apply(agrupar_marca_principal)
+        df_b["marca_estrategica"] = df_b["marca"].apply(agrupar_marca_principal)
+        col_dim = "marca_estrategica"
+    else:
+        col_dim = {"Vendedor": "vendedor", "Cliente": "cliente",
+                   "Marca": "marca", "Subclasificación": "subclasificacion"}[dim_sel]
+
+    if df_a.empty and df_b.empty:
+        st.warning("No hay ventas en ninguno de los dos períodos seleccionados.")
+        return
+
+    a_grp = df_a.groupby(col_dim)["facturacion"].sum().rename("fact_a")
+    b_grp = df_b.groupby(col_dim)["facturacion"].sum().rename("fact_b")
+    comp = pd.concat([a_grp, b_grp], axis=1).fillna(0).reset_index()
+    comp["variacion"]   = comp["fact_b"] - comp["fact_a"]
+    comp["variacion_%"] = comp.apply(
+        lambda r: (r["variacion"] / r["fact_a"] * 100) if r["fact_a"] else None, axis=1
+    )
+    comp = comp.sort_values("fact_b", ascending=False)
+
+    col_k1, col_k2, col_k3 = st.columns(3)
+    col_k1.metric(f"Facturación {periodo_a}", fmt_peso(comp["fact_a"].sum()))
+    col_k2.metric(f"Facturación {periodo_b}", fmt_peso(comp["fact_b"].sum()))
+    var_total = comp["fact_b"].sum() - comp["fact_a"].sum()
+    pct_total = (var_total / comp["fact_a"].sum() * 100) if comp["fact_a"].sum() else None
+    col_k3.metric("Variación", fmt_peso(var_total), f"{pct_total:+.1f}%" if pct_total is not None else None)
+
+    top_n = comp.head(15).sort_values("fact_b")
+    fig = px.bar(
+        top_n, x=["fact_a", "fact_b"], y=col_dim, orientation="h", barmode="group",
+        title=f"Top 15 por {dim_sel} — {periodo_a} vs {periodo_b}",
+        labels={"value": "Facturación ($)", "variable": "Período", col_dim: dim_sel},
+    )
+    newnames = {"fact_a": periodo_a, "fact_b": periodo_b}
+    fig.for_each_trace(lambda t: t.update(name=newnames.get(t.name, t.name)))
+    st.plotly_chart(fig, use_container_width=True)
+
+    tbl = comp.copy()
+    tbl["fact_a"]      = tbl["fact_a"].apply(fmt_peso)
+    tbl["fact_b"]      = tbl["fact_b"].apply(fmt_peso)
+    tbl["variacion"]   = tbl["variacion"].apply(fmt_peso)
+    tbl["variacion_%"] = tbl["variacion_%"].apply(lambda x: f"{x:+.1f}%" if pd.notna(x) else "n/a (nuevo)")
+    tbl.columns = [dim_sel, f"Fact. {periodo_a}", f"Fact. {periodo_b}", "Variación", "Variación %"]
+    st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "📥 Descargar comparación completa",
+        tbl.to_csv(index=False).encode("utf-8"),
+        file_name=f"comparacion_{periodo_a}_vs_{periodo_b}_{dim_sel}.csv".replace(" ", "_"),
+        mime="text/csv",
+        key=f"{key_prefix}_dl",
+    )
+
+
 def mapa_clientes(resumen, df_coords, color_por="estado", add_vendedor_col=None, byn=False):
     merged = resumen.merge(
         df_coords[["cod_cliente","latitud","longitud"]], on="cod_cliente", how="inner"
@@ -1489,12 +1590,12 @@ if rol == "Vendedor":
     st.divider()
 
     # Tabs
-    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente", "🧩 Tipo de cliente"]
+    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente", "🧩 Tipo de cliente", "⚖️ Comparar períodos"]
     if df_coords is not None:
         tab_labels.append("🗺️ Mapa")
     tab_objs = st.tabs(tab_labels)
-    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v, tab_tipo_v = tab_objs[:7]
-    tab_map_v = tab_objs[7] if df_coords is not None else None
+    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v, tab_tipo_v, tab_comp_v = tab_objs[:8]
+    tab_map_v = tab_objs[8] if df_coords is not None else None
 
     with tab_cli:
         filtro = st.segmented_control(
@@ -1635,6 +1736,9 @@ if rol == "Vendedor":
 
     with tab_tipo_v:
         tab_analisis_tipo_cliente(ventas_v, base_v, key_prefix="vend_tipo")
+
+    with tab_comp_v:
+        tab_comparador_periodos(ventas_v, base_v, key_prefix="vend_comp")
 
     if tab_map_v is not None:
         with tab_map_v:
@@ -1782,12 +1886,12 @@ elif rol == "Gerencia":
 
     st.divider()
 
-    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente"]
+    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente","⚖️ Comparar períodos"]
     if df_coords is not None:
         tab_labels_g.append("🗺️ Mapa")
     tabs_g = st.tabs(tab_labels_g)
-    t_rank, t_mens, t_evol, t_marc_g, t_mix_g, t_sem_g, t_tipo_g = tabs_g[:7]
-    t_mapa = tabs_g[7] if df_coords is not None else None
+    t_rank, t_mens, t_evol, t_marc_g, t_mix_g, t_sem_g, t_tipo_g, t_comp_g = tabs_g[:8]
+    t_mapa = tabs_g[8] if df_coords is not None else None
 
     with t_rank:
         # Usar el vendedor de la hoja Ventas (quien realmente vendió), no la asignación de la base.
@@ -1905,6 +2009,9 @@ elif rol == "Gerencia":
 
     with t_tipo_g:
         tab_analisis_tipo_cliente(ventas_g, base_g, key_prefix="ger_tipo")
+
+    with t_comp_g:
+        tab_comparador_periodos(ventas_g, base_g, key_prefix="ger_comp")
 
     if t_mapa is not None:
         with t_mapa:
