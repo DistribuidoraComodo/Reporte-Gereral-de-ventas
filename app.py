@@ -42,15 +42,24 @@ def cargar_datos(archivo):
         return None
 
     # -- Hoja Ventas --
-    df_v = xls.parse("Ventas")
+    df_v_raw = xls.parse("Ventas")
     nombres_v = [
         "fecha","periodo","cod_cliente","cliente","cod_vendedor","vendedor",
         "cbte","t_cbte","pto_vta","n_cbte","cod_articulo","descripcion",
         "cantidad","facturacion","familia","rubro","subrubro","marca",
         "clasificacion","subclasificacion","localidad","provincia",
     ]
-    df_v = df_v.iloc[:, :len(nombres_v)]
+    # "Tipo Cliente" se agregó como columna nueva al final; se busca por nombre
+    # de header (no por posición) para no depender de dónde quede ubicada.
+    col_tipo_cliente_v = _find_col(df_v_raw, ["tipocliente"])
+
+    df_v = df_v_raw.iloc[:, :len(nombres_v)].copy()
     df_v.columns = nombres_v
+    if col_tipo_cliente_v:
+        df_v["tipo_cliente_venta"] = df_v_raw[col_tipo_cliente_v].astype(str).str.strip()
+        df_v.loc[df_v["tipo_cliente_venta"].isin(["", "nan", "None"]), "tipo_cliente_venta"] = None
+    else:
+        df_v["tipo_cliente_venta"] = None
     df_v["fecha"] = pd.to_datetime(df_v["fecha"], errors="coerce")
     df_v = df_v.dropna(subset=["fecha","facturacion"])
     df_v["año"] = df_v["fecha"].dt.year
@@ -76,6 +85,7 @@ def cargar_datos(archivo):
             "Zona":            "zona",
             "Fechaalta":       "fecha_alta",
             "Fechabaja":       "fecha_baja",
+            "TipoCliente":     "tipo_cliente_base",
         })
         df_b["cod_cliente"] = pd.to_numeric(df_b["cod_cliente"], errors="coerce")
         df_b = df_b.dropna(subset=["cod_cliente"])
@@ -110,6 +120,15 @@ def cargar_datos(archivo):
         # Compatibilidad con formato anterior de una sola hoja "Base clientes"
         bases.append(_procesar_base(xls.parse("Base clientes"), "activo"))
     df_b = pd.concat(bases, ignore_index=True)
+
+    # -- Tipo de cliente: último valor no nulo en Ventas; si no hay, el de Base clientes --
+    ventas_con_tipo = df_v.dropna(subset=["tipo_cliente_venta"]).sort_values("fecha")
+    tipo_por_ventas = ventas_con_tipo.groupby("cod_cliente")["tipo_cliente_venta"].last()
+    df_b["tipo_cliente"] = df_b["cod_cliente"].map(tipo_por_ventas)
+    if "tipo_cliente_base" in df_b.columns:
+        df_b["tipo_cliente"] = df_b["tipo_cliente"].fillna(
+            df_b["tipo_cliente_base"].astype(str).str.strip().replace({"": None, "nan": None})
+        )
 
     # -- Hoja Base artículos (descripción limpia, sin lote) --
     df_art = None
@@ -1069,6 +1088,85 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
             st.dataframe(tbl_art, use_container_width=True, hide_index=True)
 
 
+def tab_analisis_tipo_cliente(ventas_df, base_df, key_prefix=""):
+    """Análisis integral por Tipo de cliente (A/B/C/Mayorista Gerencia/Mayorista Vendedores)."""
+    if "tipo_cliente" not in base_df.columns or base_df["tipo_cliente"].dropna().empty:
+        st.info("No hay clientes con 'Tipo de cliente' cargado en la base.")
+        return
+
+    hoy_tc    = ventas_df["fecha"].max()
+    año_act_tc = hoy_tc.year
+
+    tipo_map = base_df[["cod_cliente","tipo_cliente"]].dropna(subset=["tipo_cliente"]).drop_duplicates("cod_cliente")
+    ventas_tc = ventas_df.merge(tipo_map, on="cod_cliente", how="inner")
+
+    if ventas_tc.empty:
+        st.info("No hay ventas de clientes con 'Tipo de cliente' cargado.")
+        return
+
+    resumen_tipo = (
+        ventas_tc[ventas_tc["año"] == año_act_tc]
+        .groupby("tipo_cliente")
+        .agg(facturacion=("facturacion", "sum"), clientes=("cod_cliente", "nunique"))
+        .reset_index()
+        .sort_values("facturacion", ascending=False)
+    )
+    resumen_tipo["fact_promedio"] = resumen_tipo["facturacion"] / resumen_tipo["clientes"]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = px.bar(
+            resumen_tipo, x="tipo_cliente", y="facturacion",
+            title=f"Facturación por tipo de cliente — {año_act_tc}",
+            labels={"tipo_cliente": "Tipo de cliente", "facturacion": "Facturación ($)"},
+            color_discrete_sequence=["#0066cc"],
+            text=resumen_tipo["facturacion"].apply(fmt_compacto),
+        )
+        fig.update_traces(textposition="outside")
+        st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        fig2 = px.pie(resumen_tipo, values="clientes", names="tipo_cliente",
+                      title=f"Clientes por tipo — {año_act_tc}")
+        st.plotly_chart(fig2, use_container_width=True)
+
+    tbl = resumen_tipo.copy()
+    tbl["facturacion"]   = tbl["facturacion"].apply(fmt_peso)
+    tbl["fact_promedio"] = tbl["fact_promedio"].apply(fmt_peso)
+    tbl.columns = ["Tipo de cliente", "Facturación", "Clientes", "Fact. promedio/cliente"]
+    st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("#### Evolución mensual por tipo de cliente")
+    evol_tipo = ventas_tc.groupby(["año", "mes", "tipo_cliente"])["facturacion"].sum().reset_index()
+    evol_tipo["periodo"] = pd.to_datetime(
+        evol_tipo["año"].astype(str) + "-" + evol_tipo["mes"].astype(str).str.zfill(2) + "-01"
+    )
+    fig3 = px.line(
+        evol_tipo.sort_values("periodo"), x="periodo", y="facturacion", color="tipo_cliente",
+        title="Evolución mensual por tipo de cliente", markers=True,
+        labels={"periodo": "", "facturacion": "Facturación ($)", "tipo_cliente": "Tipo"},
+    )
+    fig3.update_layout(xaxis_tickformat="%b %Y", hovermode="x unified")
+    st.plotly_chart(fig3, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("#### Detalle por tipo")
+    tipo_sel = st.selectbox(
+        "Ver top clientes de un tipo:",
+        resumen_tipo["tipo_cliente"].tolist(),
+        key=f"{key_prefix}_tipo_sel",
+    )
+    ventas_tipo_sel = ventas_tc[(ventas_tc["tipo_cliente"] == tipo_sel) & (ventas_tc["año"] == año_act_tc)]
+    top_cli = (
+        ventas_tipo_sel.groupby(["cod_cliente", "cliente"])["facturacion"].sum()
+        .reset_index().sort_values("facturacion", ascending=False).head(20)
+    )
+    top_cli["facturacion"] = top_cli["facturacion"].apply(fmt_peso)
+    top_cli = top_cli[["cliente", "facturacion"]]
+    top_cli.columns = ["Cliente", f"Fact. {año_act_tc}"]
+    st.dataframe(top_cli, use_container_width=True, hide_index=True)
+
+
 def mapa_clientes(resumen, df_coords, color_por="estado", add_vendedor_col=None, byn=False):
     merged = resumen.merge(
         df_coords[["cod_cliente","latitud","longitud"]], on="cod_cliente", how="inner"
@@ -1214,12 +1312,23 @@ with st.sidebar:
         key="filtro_subclasif",
     )
 
+    tipo_cliente_opts = sorted(df_base_activa["tipo_cliente"].dropna().unique().tolist())
+    sel_tipo_cliente = st.multiselect(
+        "Tipo de cliente (A/B/C/Mayorista):",
+        options=tipo_cliente_opts,
+        default=[],
+        placeholder="Todos",
+        key="filtro_tipo_cliente",
+    )
+
 # Aplicar filtros a la base de clientes (afecta TODOS los análisis)
 df_base_filtrada = df_base_activa.copy()
 if sel_clasif:
     df_base_filtrada = df_base_filtrada[df_base_filtrada["clasificacion"].isin(sel_clasif)]
 if sel_subclasif:
     df_base_filtrada = df_base_filtrada[df_base_filtrada["subclasificacion"].isin(sel_subclasif)]
+if sel_tipo_cliente:
+    df_base_filtrada = df_base_filtrada[df_base_filtrada["tipo_cliente"].isin(sel_tipo_cliente)]
 
 # Filtrar ventas a solo los clientes que quedaron en la base
 clientes_filtrados = df_base_filtrada["cod_cliente"].unique()
@@ -1230,6 +1339,7 @@ filtros_activos = []
 if ver_baja_susp:  filtros_activos.append("Incluye baja/susp")
 if sel_clasif:     filtros_activos.append(f"Clasif: {', '.join(sel_clasif)}")
 if sel_subclasif:  filtros_activos.append(f"Subclasif: {', '.join(sel_subclasif)}")
+if sel_tipo_cliente: filtros_activos.append(f"Tipo cliente: {', '.join(sel_tipo_cliente)}")
 if filtros_activos:
     st.info(f"🔽 Filtro activo: {' | '.join(filtros_activos)}")
 
@@ -1347,12 +1457,12 @@ if rol == "Vendedor":
     st.divider()
 
     # Tabs
-    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente"]
+    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente", "🧩 Tipo de cliente"]
     if df_coords is not None:
         tab_labels.append("🗺️ Mapa")
     tab_objs = st.tabs(tab_labels)
-    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v = tab_objs[:6]
-    tab_map_v = tab_objs[6] if df_coords is not None else None
+    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v, tab_tipo_v = tab_objs[:7]
+    tab_map_v = tab_objs[7] if df_coords is not None else None
 
     with tab_cli:
         filtro = st.segmented_control(
@@ -1490,6 +1600,9 @@ if rol == "Vendedor":
 
     with tab_mix_v:
         tab_mix_cliente(ventas_v, base_v, key_prefix="vend_mix")
+
+    with tab_tipo_v:
+        tab_analisis_tipo_cliente(ventas_v, base_v, key_prefix="vend_tipo")
 
     if tab_map_v is not None:
         with tab_map_v:
@@ -1637,12 +1750,12 @@ elif rol == "Gerencia":
 
     st.divider()
 
-    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo"]
+    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente"]
     if df_coords is not None:
         tab_labels_g.append("🗺️ Mapa")
     tabs_g = st.tabs(tab_labels_g)
-    t_rank, t_mens, t_evol, t_marc_g, t_mix_g, t_sem_g = tabs_g[:6]
-    t_mapa = tabs_g[6] if df_coords is not None else None
+    t_rank, t_mens, t_evol, t_marc_g, t_mix_g, t_sem_g, t_tipo_g = tabs_g[:7]
+    t_mapa = tabs_g[7] if df_coords is not None else None
 
     with t_rank:
         # Usar el vendedor de la hoja Ventas (quien realmente vendió), no la asignación de la base.
@@ -1757,6 +1870,9 @@ elif rol == "Gerencia":
 
     with t_sem_g:
         tab_semaforo(ventas_g, base_g, key_prefix="ger_sem")
+
+    with t_tipo_g:
+        tab_analisis_tipo_cliente(ventas_g, base_g, key_prefix="ger_tipo")
 
     if t_mapa is not None:
         with t_mapa:
