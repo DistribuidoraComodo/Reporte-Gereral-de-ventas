@@ -1285,6 +1285,91 @@ def tab_comparador_periodos(ventas_df, base_df, key_prefix=""):
     )
 
 
+def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
+    """Altas de clientes por mes, según 'fecha_alta' de la Base clientes."""
+    df = base_df.dropna(subset=["fecha_alta"]).copy()
+    if df.empty:
+        st.info("No hay clientes con fecha de alta cargada en la base.")
+        return
+
+    # Sanea fechas de alta corruptas (ej. años tipo 4500 por errores de carga)
+    hoy_ts = pd.Timestamp.now().normalize()
+    validas = df["fecha_alta"].between(pd.Timestamp("2000-01-01"), hoy_ts)
+    n_invalidas = int((~validas).sum())
+    df = df[validas]
+    if df.empty:
+        st.info("No hay clientes con fecha de alta válida cargada en la base.")
+        return
+    if n_invalidas:
+        st.caption(
+            f"⚠️ Se excluyeron {n_invalidas} clientes con fecha de alta fuera de rango "
+            f"(anteriores a 2000 o posteriores a hoy) — revisar carga en Base clientes."
+        )
+
+    fecha_min = df["fecha_alta"].min().date()
+    fecha_max = df["fecha_alta"].max().date()
+    col1, col2 = st.columns(2)
+    with col1:
+        desde = st.date_input("Desde", value=fecha_min, min_value=fecha_min, max_value=fecha_max,
+                               key=f"{key_prefix}_desde")
+    with col2:
+        hasta = st.date_input("Hasta", value=fecha_max, min_value=fecha_min, max_value=fecha_max,
+                               key=f"{key_prefix}_hasta")
+    if desde > hasta:
+        st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
+        return
+
+    df_rango = df[(df["fecha_alta"] >= pd.Timestamp(desde)) & (df["fecha_alta"] <= pd.Timestamp(hasta))].copy()
+    if df_rango.empty:
+        st.info("No hay altas de clientes en el período seleccionado.")
+        return
+
+    df_rango["periodo_alta"] = df_rango["fecha_alta"].values.astype("datetime64[M]")
+
+    altas_mes = df_rango.groupby("periodo_alta").size().reset_index(name="altas")
+    fig = px.bar(
+        altas_mes.sort_values("periodo_alta"), x="periodo_alta", y="altas",
+        title="Altas de clientes por mes",
+        labels={"periodo_alta": "", "altas": "Clientes nuevos"},
+        color_discrete_sequence=["#0066cc"], text="altas",
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(xaxis_tickformat="%b %Y")
+    st.plotly_chart(fig, use_container_width=True)
+
+    if not mostrar_vendedor:
+        st.metric("Total altas en el período", len(df_rango))
+        return
+
+    st.markdown("---")
+    st.markdown("#### Altas por vendedor y mes")
+    pivot = df_rango.groupby(["vendedor_asignado", "periodo_alta"]).size().reset_index(name="altas")
+    fig2 = px.bar(
+        pivot.sort_values("periodo_alta"), x="periodo_alta", y="altas", color="vendedor_asignado",
+        title="Altas por vendedor y mes",
+        labels={"periodo_alta": "", "altas": "Clientes nuevos", "vendedor_asignado": "Vendedor"},
+    )
+    fig2.update_layout(xaxis_tickformat="%b %Y", barmode="stack")
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown("#### Total de altas por vendedor (período seleccionado)")
+    tabla = (
+        df_rango.groupby("vendedor_asignado").size().reset_index(name="altas")
+        .sort_values("altas", ascending=False)
+    )
+    tabla.columns = ["Vendedor", "Altas"]
+    st.dataframe(tabla, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "📥 Descargar detalle de altas",
+        df_rango[["cod_cliente", "razon_social", "vendedor_asignado", "fecha_alta"]]
+        .sort_values("fecha_alta", ascending=False).to_csv(index=False).encode("utf-8"),
+        file_name=f"altas_clientes_{desde}_{hasta}.csv",
+        mime="text/csv",
+        key=f"{key_prefix}_dl",
+    )
+
+
 def mapa_clientes(resumen, df_coords, color_por="estado", add_vendedor_col=None, byn=False):
     merged = resumen.merge(
         df_coords[["cod_cliente","latitud","longitud"]], on="cod_cliente", how="inner"
@@ -1590,12 +1675,12 @@ if rol == "Vendedor":
     st.divider()
 
     # Tabs
-    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente", "🧩 Tipo de cliente", "⚖️ Comparar períodos"]
+    tab_labels = ["📋 Mis clientes", "⚠️ Inactivos / Sin compras", "📅 Facturación mensual", "📈 Gráficos", "🏷️ Análisis de marcas", "🔍 Mix por cliente", "🧩 Tipo de cliente", "⚖️ Comparar períodos", "🆕 Altas de clientes"]
     if df_coords is not None:
         tab_labels.append("🗺️ Mapa")
     tab_objs = st.tabs(tab_labels)
-    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v, tab_tipo_v, tab_comp_v = tab_objs[:8]
-    tab_map_v = tab_objs[8] if df_coords is not None else None
+    tab_cli, tab_inact, tab_mens, tab_graf, tab_marcas_v, tab_mix_v, tab_tipo_v, tab_comp_v, tab_altas_v = tab_objs[:9]
+    tab_map_v = tab_objs[9] if df_coords is not None else None
 
     with tab_cli:
         filtro = st.segmented_control(
@@ -1739,6 +1824,9 @@ if rol == "Vendedor":
 
     with tab_comp_v:
         tab_comparador_periodos(ventas_v, base_v, key_prefix="vend_comp")
+
+    with tab_altas_v:
+        tab_altas_clientes(base_v, key_prefix="vend_altas", mostrar_vendedor=False)
 
     if tab_map_v is not None:
         with tab_map_v:
@@ -1886,12 +1974,12 @@ elif rol == "Gerencia":
 
     st.divider()
 
-    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente","⚖️ Comparar períodos"]
+    tab_labels_g = ["👥 Ranking","📅 Mensual","📈 Evolución","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente","⚖️ Comparar períodos","🆕 Altas de clientes"]
     if df_coords is not None:
         tab_labels_g.append("🗺️ Mapa")
     tabs_g = st.tabs(tab_labels_g)
-    t_rank, t_mens, t_evol, t_marc_g, t_mix_g, t_sem_g, t_tipo_g, t_comp_g = tabs_g[:8]
-    t_mapa = tabs_g[8] if df_coords is not None else None
+    t_rank, t_mens, t_evol, t_marc_g, t_mix_g, t_sem_g, t_tipo_g, t_comp_g, t_altas_g = tabs_g[:9]
+    t_mapa = tabs_g[9] if df_coords is not None else None
 
     with t_rank:
         # Usar el vendedor de la hoja Ventas (quien realmente vendió), no la asignación de la base.
@@ -2012,6 +2100,9 @@ elif rol == "Gerencia":
 
     with t_comp_g:
         tab_comparador_periodos(ventas_g, base_g, key_prefix="ger_comp")
+
+    with t_altas_g:
+        tab_altas_clientes(base_g, key_prefix="ger_altas", mostrar_vendedor=True)
 
     if t_mapa is not None:
         with t_mapa:
