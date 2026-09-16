@@ -1374,13 +1374,43 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
     fig2.update_layout(xaxis_tickformat="%b %Y", barmode="stack")
     st.plotly_chart(fig2, use_container_width=True)
 
-    st.markdown("#### Total de altas por vendedor (período seleccionado)")
-    tabla = (
-        df_rango.groupby("vendedor_asignado").size().reset_index(name="altas")
-        .sort_values("altas", ascending=False)
+    st.markdown("#### Altas por vendedor y mes (período seleccionado)")
+    st.caption("Hacé clic en una celda para ver el detalle de clientes.")
+    pivot_conteo = (
+        df_rango.groupby(["vendedor_asignado", "periodo_alta"]).size()
+        .unstack("periodo_alta", fill_value=0)
     )
-    tabla.columns = ["Vendedor", "Altas"]
-    st.dataframe(tabla, use_container_width=True, hide_index=True)
+    pivot_conteo = pivot_conteo.reindex(sorted(pivot_conteo.columns), axis=1)
+    col_labels = {c: c.strftime("%b %Y") for c in pivot_conteo.columns}
+    pivot_conteo = pivot_conteo.rename(columns=col_labels)
+    pivot_conteo["Total"] = pivot_conteo.sum(axis=1)
+    pivot_conteo = pivot_conteo.sort_values("Total", ascending=False)
+    pivot_display = pivot_conteo.reset_index().rename(columns={"vendedor_asignado": "Vendedor"})
+
+    evento = st.dataframe(
+        pivot_display, use_container_width=True, hide_index=True,
+        on_select="rerun", selection_mode="single-cell",
+        key=f"{key_prefix}_pivot_altas",
+    )
+
+    celdas = evento["selection"]["cells"] if evento else []
+    if celdas:
+        fila, col_sel = celdas[0]
+        vendedor_click = pivot_display.iloc[fila]["Vendedor"]
+        if col_sel != "Vendedor":
+            detalle_click = df_rango[df_rango["vendedor_asignado"] == vendedor_click].copy()
+            if col_sel != "Total":
+                detalle_click = detalle_click[
+                    detalle_click["periodo_alta"].dt.strftime("%b %Y") == col_sel
+                ]
+            detalle_click = (
+                detalle_click[["cod_cliente", "razon_social", "fecha_alta"]]
+                .sort_values("fecha_alta", ascending=False)
+            )
+            detalle_click["fecha_alta"] = detalle_click["fecha_alta"].dt.strftime("%d/%m/%Y")
+            detalle_click.columns = ["Código", "Cliente", "Fecha alta"]
+            st.markdown(f"##### Clientes — {vendedor_click} — {col_sel}")
+            st.dataframe(detalle_click, use_container_width=True, hide_index=True)
 
     st.download_button(
         "📥 Descargar detalle de altas",
