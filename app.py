@@ -424,10 +424,12 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
         st.plotly_chart(fig_glob, use_container_width=True)
     with sg2:
         tbl_g = brand_g.copy()
-        tbl_g["facturacion"] = tbl_g["facturacion"].apply(fmt_peso)
-        tbl_g["pct"]         = tbl_g["pct"].apply(lambda x: f"{x:.1f}%")
-        tbl_g.columns        = ["Marca", "Facturación", "% Total"]
-        st.dataframe(tbl_g, use_container_width=True, hide_index=True)
+        tbl_g["facturacion"] = tbl_g["facturacion"].round(0)
+        tbl_g["pct"]  = tbl_g["pct"].apply(lambda x: f"{x:.1f}%")
+        tbl_g.columns = ["Marca", "Facturación", "% Total"]
+        st.dataframe(tbl_g, use_container_width=True, hide_index=True, column_config={
+            "Facturación": st.column_config.NumberColumn(format="localized"),
+        })
 
     st.divider()
 
@@ -502,12 +504,14 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
     cli_det.insert(0, "#", range(1, len(cli_det)+1))
 
     tbl_det = cli_det.copy()
-    tbl_det["facturacion"]   = tbl_det["facturacion"].apply(fmt_peso)
-    tbl_det["unidades"]      = tbl_det["unidades"].apply(lambda x: f"{x:,.0f}")
+    tbl_det["facturacion"] = tbl_det["facturacion"].round(0)
     tbl_det["ultima_compra"] = tbl_det["ultima_compra"].dt.strftime("%d/%m/%Y")
     tbl_det = tbl_det[["#", "cliente", "unidades", "facturacion", "n_marcas", "ultima_compra"]]
     tbl_det.columns = ["#", "Cliente", "Unidades", "Facturación", "Marcas distintas", "Última compra"]
-    st.dataframe(tbl_det, use_container_width=True, hide_index=True)
+    st.dataframe(tbl_det, use_container_width=True, hide_index=True, column_config={
+        "Unidades": st.column_config.NumberColumn(format="localized"),
+        "Facturación": st.column_config.NumberColumn(format="localized"),
+    })
 
     st.download_button(
         "📥 Descargar lista de clientes",
@@ -564,14 +568,16 @@ def resumen_clasificacion(base_df, ventas_df, resumen_df=None):
         tbl[["activos","inactivos","sin_compras"]] = tbl[["activos","inactivos","sin_compras"]].astype(int)
 
     tbl = tbl.sort_values(grp_cols)
-    tbl["facturacion"] = tbl["facturacion"].apply(fmt_peso)
-    tbl["clientes"]    = tbl["clientes"].astype(int)
+    tbl["clientes"] = tbl["clientes"].astype(int)
+    tbl["facturacion"] = tbl["facturacion"].round(0)
 
     rename = {"clasificacion":"Clasificación","subclasificacion":"Subclasificación",
                "clientes":"Clientes","facturacion":"Facturación año",
                "activos":"✅ Activos","inactivos":"⚠️ Inactivos","sin_compras":"❌ Sin compras"}
     tbl = tbl.rename(columns=rename)
-    st.dataframe(tbl, use_container_width=True, hide_index=True)
+    st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
+        "Facturación año": st.column_config.NumberColumn(format="localized"),
+    })
 
 
 def tabla_mensual(df_f):
@@ -581,10 +587,14 @@ def tabla_mensual(df_f):
     )
     pivot.index = [MESES_FULL.get(i, i) for i in pivot.index]
     total = pivot.sum().rename("TOTAL")
-    pivot = pd.concat([pivot, pd.DataFrame([total])])
-    for col in pivot.columns:
-        pivot[col] = pivot[col].apply(fmt_peso)
+    pivot = pd.concat([pivot, pd.DataFrame([total])]).round(0)
     return pivot
+
+
+def money_column_config(pivot):
+    """column_config para mostrar cada columna numérica de un pivot como moneda,
+    sin romper el ordenamiento por encabezado (queda como número real)."""
+    return {str(col): st.column_config.NumberColumn(format="localized") for col in pivot.columns}
 
 
 @st.cache_data(show_spinner="Calculando mix de marcas...")
@@ -699,13 +709,16 @@ def tab_analisis_marcas(ventas_df, base_df, key_prefix="", vendedores_disponible
     if vendedores_disponibles is not None and "vendedor_asignado" in filtrados.columns:
         cols_tbl.insert(1, "vendedor_asignado")
     tbl = filtrados[cols_tbl].copy()
+    tbl["facturacion"] = tbl["facturacion"].round(0)
     tbl["pct_marca"]   = tbl["pct_marca"].apply(lambda x: f"{x:.1f}%")
-    tbl["facturacion"] = tbl["facturacion"].apply(fmt_peso)
     tbl["n_marcas"]    = tbl["n_marcas"].apply(lambda x: f"{x} marca{'s' if x>1 else ''}")
-    rename = {"cliente":"Cliente","pct_marca":f"% {marca_sel}","facturacion":f"Fact. {marca_sel}",
+    col_fact = f"Fact. {marca_sel}"
+    rename = {"cliente":"Cliente","pct_marca":f"% {marca_sel}","facturacion":col_fact,
               "n_marcas":"Marcas que compra","vendedor_asignado":"Vendedor"}
     tbl = tbl.rename(columns=rename)
-    st.dataframe(tbl, use_container_width=True, hide_index=True)
+    st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
+        col_fact: st.column_config.NumberColumn(format="localized"),
+    })
 
     st.download_button(
         "📥 Descargar lista",
@@ -936,10 +949,12 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
         st.plotly_chart(fig, use_container_width=True)
     with col_t:
         tbl_mix = mix_cli[["marca","facturacion","pct"]].copy()
-        tbl_mix["facturacion"] = tbl_mix["facturacion"].apply(fmt_peso)
+        tbl_mix["facturacion"] = tbl_mix["facturacion"].round(0)
         tbl_mix["pct"] = tbl_mix["pct"].apply(lambda x: f"{x:.1f}%")
         tbl_mix.columns = ["Marca", "Facturación", "% del total"]
-        st.dataframe(tbl_mix, use_container_width=True, hide_index=True)
+        st.dataframe(tbl_mix, use_container_width=True, hide_index=True, column_config={
+            "Facturación": st.column_config.NumberColumn(format="localized"),
+        })
 
     # ── Evolución mensual por marca ──
     st.markdown("#### Evolución mensual por marca")
@@ -989,10 +1004,12 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
     if not top10_art.empty:
         top10_art.insert(0, "#", range(1, len(top10_art)+1))
         tbl_top10 = top10_art.copy()
-        tbl_top10["cantidad"]    = tbl_top10["cantidad"].apply(lambda x: f"{x:,.0f}")
-        tbl_top10["facturacion"] = tbl_top10["facturacion"].apply(fmt_peso)
+        tbl_top10["facturacion"] = tbl_top10["facturacion"].round(0)
         tbl_top10.columns = ["#", "Código", "Descripción", "Unidades", "Facturación"]
-        st.dataframe(tbl_top10, use_container_width=True, hide_index=True)
+        st.dataframe(tbl_top10, use_container_width=True, hide_index=True, column_config={
+            "Unidades": st.column_config.NumberColumn(format="localized"),
+            "Facturación": st.column_config.NumberColumn(format="localized"),
+        })
     else:
         st.info("No hay artículos para los filtros aplicados.")
 
@@ -1051,12 +1068,14 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
             st.plotly_chart(fig_art2, use_container_width=True)
 
         tbl_art = art_mensual.copy()
-        tbl_art["periodo"]     = tbl_art["periodo"].dt.strftime("%b %Y")
-        tbl_art["cantidad"]    = tbl_art["cantidad"].apply(lambda x: f"{x:,.0f}")
-        tbl_art["facturacion"] = tbl_art["facturacion"].apply(fmt_peso)
+        tbl_art["facturacion"] = tbl_art["facturacion"].round(0)
+        tbl_art["periodo"] = tbl_art["periodo"].dt.strftime("%b %Y")
         tbl_art = tbl_art[["periodo","cantidad","facturacion"]]
         tbl_art.columns = ["Período","Cantidad","Facturación"]
-        st.dataframe(tbl_art, use_container_width=True, hide_index=True)
+        st.dataframe(tbl_art, use_container_width=True, hide_index=True, column_config={
+            "Cantidad": st.column_config.NumberColumn(format="localized"),
+            "Facturación": st.column_config.NumberColumn(format="localized"),
+        })
 
 
 def tab_analisis_tipo_cliente(ventas_df, base_df, key_prefix=""):
@@ -1101,10 +1120,13 @@ def tab_analisis_tipo_cliente(ventas_df, base_df, key_prefix=""):
         st.plotly_chart(fig2, use_container_width=True)
 
     tbl = resumen_tipo.copy()
-    tbl["facturacion"]   = tbl["facturacion"].apply(fmt_peso)
-    tbl["fact_promedio"] = tbl["fact_promedio"].apply(fmt_peso)
+    tbl["facturacion"]   = tbl["facturacion"].round(0)
+    tbl["fact_promedio"] = tbl["fact_promedio"].round(0)
     tbl.columns = ["Tipo de cliente", "Facturación", "Clientes", "Fact. promedio/cliente"]
-    st.dataframe(tbl, use_container_width=True, hide_index=True)
+    st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
+        "Facturación": st.column_config.NumberColumn(format="localized"),
+        "Fact. promedio/cliente": st.column_config.NumberColumn(format="localized"),
+    })
 
     st.markdown("---")
     st.markdown("#### Evolución mensual por tipo de cliente")
@@ -1132,10 +1154,13 @@ def tab_analisis_tipo_cliente(ventas_df, base_df, key_prefix=""):
         ventas_tipo_sel.groupby(["cod_cliente", "cliente"])["facturacion"].sum()
         .reset_index().sort_values("facturacion", ascending=False).head(20)
     )
-    top_cli["facturacion"] = top_cli["facturacion"].apply(fmt_peso)
+    top_cli["facturacion"] = top_cli["facturacion"].round(0)
     top_cli = top_cli[["cliente", "facturacion"]]
-    top_cli.columns = ["Cliente", f"Fact. {año_act_tc}"]
-    st.dataframe(top_cli, use_container_width=True, hide_index=True)
+    col_fact_tc = f"Fact. {año_act_tc}"
+    top_cli.columns = ["Cliente", col_fact_tc]
+    st.dataframe(top_cli, use_container_width=True, hide_index=True, column_config={
+        col_fact_tc: st.column_config.NumberColumn(format="localized"),
+    })
 
 
 def tab_comparador_periodos(ventas_df, base_df, key_prefix=""):
@@ -1223,12 +1248,17 @@ def tab_comparador_periodos(ventas_df, base_df, key_prefix=""):
     st.plotly_chart(fig, use_container_width=True)
 
     tbl = comp.copy()
-    tbl["fact_a"]      = tbl["fact_a"].apply(fmt_peso)
-    tbl["fact_b"]      = tbl["fact_b"].apply(fmt_peso)
-    tbl["variacion"]   = tbl["variacion"].apply(fmt_peso)
+    tbl["fact_a"]    = tbl["fact_a"].round(0)
+    tbl["fact_b"]    = tbl["fact_b"].round(0)
+    tbl["variacion"] = tbl["variacion"].round(0)
     tbl["variacion_%"] = tbl["variacion_%"].apply(lambda x: f"{x:+.1f}%" if pd.notna(x) else "n/a (nuevo)")
-    tbl.columns = [dim_sel, f"Fact. {periodo_a}", f"Fact. {periodo_b}", "Variación", "Variación %"]
-    st.dataframe(tbl, use_container_width=True, hide_index=True)
+    col_fact_a, col_fact_b = f"Fact. {periodo_a}", f"Fact. {periodo_b}"
+    tbl.columns = [dim_sel, col_fact_a, col_fact_b, "Variación", "Variación %"]
+    st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
+        col_fact_a: st.column_config.NumberColumn(format="localized"),
+        col_fact_b: st.column_config.NumberColumn(format="localized"),
+        "Variación": st.column_config.NumberColumn(format="localized"),
+    })
 
     st.download_button(
         "📥 Descargar comparación completa",
@@ -1617,9 +1647,11 @@ if rol == "Vendedor":
         ):
             st.caption("Estos clientes tuvieron ventas registradas a tu nombre pero actualmente están asignados a otro vendedor o no tienen registro en la base.")
             df_extra = pd.DataFrame(reasignados_info + sin_base_info)
-            df_extra["facturacion"] = df_extra["facturacion"].apply(fmt_peso)
+            df_extra["facturacion"] = df_extra["facturacion"].round(0)
             df_extra.columns = ["Cód. cliente","Cliente","Vendedor actual en base","Facturación histórica"]
-            st.dataframe(df_extra, use_container_width=True, hide_index=True)
+            st.dataframe(df_extra, use_container_width=True, hide_index=True, column_config={
+                "Facturación histórica": st.column_config.NumberColumn(format="localized"),
+            })
 
     # KPIs
     mes_act, año_act = hoy.month, hoy.year
@@ -1685,12 +1717,15 @@ if rol == "Vendedor":
                         "fact_3m","tendencia","fact_año","marcas","localidad"]].copy()
         df_d["ultima_compra"]   = df_d["ultima_compra"].apply(fmt_ultima)
         df_d["dias_sin_compra"] = df_d["dias_sin_compra"].apply(fmt_dias)
-        df_d["fact_3m"]         = df_d["fact_3m"].apply(fmt_peso)
-        df_d["fact_año"]        = df_d["fact_año"].apply(fmt_peso)
+        df_d["fact_3m"]         = df_d["fact_3m"].round(0)
+        df_d["fact_año"]        = df_d["fact_año"].round(0)
         df_d["tendencia"]       = df_d["tendencia"].apply(fmt_tendencia)
         df_d.columns = ["Cliente","Última compra","Días sin compra","Estado",
                         "Fact. 3 meses","Tendencia","Fact. año","Marcas","Localidad"]
-        st.dataframe(df_d, use_container_width=True, hide_index=True)
+        st.dataframe(df_d, use_container_width=True, hide_index=True, column_config={
+            "Fact. 3 meses": st.column_config.NumberColumn(format="localized"),
+            "Fact. año": st.column_config.NumberColumn(format="localized"),
+        })
 
         st.markdown("---")
         with st.expander("📊 Resumen por clasificación y subclasificación"):
@@ -1738,10 +1773,12 @@ if rol == "Vendedor":
                                   "fact_año","marcas","localidad","provincia","telefono","mail"]].copy()
             df_i["ultima_compra"]   = df_i["ultima_compra"].apply(fmt_ultima)
             df_i["dias_sin_compra"] = df_i["dias_sin_compra"].apply(fmt_dias)
-            df_i["fact_año"]        = df_i["fact_año"].apply(fmt_peso)
+            df_i["fact_año"]        = df_i["fact_año"].round(0)
             df_i.columns = ["Cliente","Última compra (global)","Días sin compra",
                             "Fact. año","Marcas","Localidad","Provincia","Teléfono","Mail"]
-            st.dataframe(df_i, use_container_width=True, hide_index=True)
+            st.dataframe(df_i, use_container_width=True, hide_index=True, column_config={
+                "Fact. año": st.column_config.NumberColumn(format="localized"),
+            })
 
             st.download_button(
                 "📥 Descargar lista para gestión",
@@ -1752,7 +1789,8 @@ if rol == "Vendedor":
 
     with tab_mens:
         st.markdown("#### Facturación mensual por año")
-        st.dataframe(tabla_mensual(ventas_v), use_container_width=True)
+        pivot_mens_v = tabla_mensual(ventas_v)
+        st.dataframe(pivot_mens_v, use_container_width=True, column_config=money_column_config(pivot_mens_v))
 
         # ── Variación porcentual mes a mes ──
         st.markdown("#### Variación % mes a mes")
@@ -1764,13 +1802,14 @@ if rol == "Vendedor":
                 evol_var.loc[i, "var_pct"] = None
         evol_var["Mes"] = evol_var["mes"].map(MESES_FULL)
         evol_var["Año"] = evol_var["año"].astype(str)
-        evol_var["Facturación"] = evol_var["facturacion"].apply(fmt_peso)
+        evol_var["Facturación"] = evol_var["facturacion"].round(0)
         evol_var["Variación vs mes anterior"] = evol_var["var_pct"].apply(
             lambda v: "—" if pd.isna(v) else (f"▲ {v:.1f}%" if v >= 0 else f"▼ {abs(v):.1f}%")
         )
         st.dataframe(
             evol_var[["Año","Mes","Facturación","Variación vs mes anterior"]],
-            use_container_width=True, hide_index=True
+            use_container_width=True, hide_index=True,
+            column_config={"Facturación": st.column_config.NumberColumn(format="localized")},
         )
 
         evol = ventas_v.groupby(["año","mes"])["facturacion"].sum().reset_index()
@@ -1981,20 +2020,28 @@ elif rol == "Gerencia":
                          title=f"Facturación por vendedor — {año_act}",
                          labels={"facturacion":"Facturación ($)","vendedor":""},
                          color_discrete_sequence=["#0066cc"])
-            fig.update_layout(yaxis={"categoryorder":"total ascending"}, margin=dict(t=40, r=20))
+            fig.update_layout(
+                yaxis={"categoryorder":"total ascending", "tickmode":"linear"},
+                margin=dict(t=40, r=20),
+                height=max(400, 26*len(ranking)),
+            )
             st.plotly_chart(fig, use_container_width=True)
         with col2:
             tbl = ranking.copy()
+            tbl["facturacion"] = tbl["facturacion"].round(0)
             tbl.insert(0, "#", range(1, len(tbl)+1))
-            tbl["facturacion"] = tbl["facturacion"].apply(fmt_peso)
-            tbl.columns = ["#", "Vendedor", f"Fact. {año_act}"]
-            st.dataframe(tbl, use_container_width=True, hide_index=True)
+            col_fact_rank = f"Fact. {año_act}"
+            tbl.columns = ["#", "Vendedor", col_fact_rank]
+            st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
+                col_fact_rank: st.column_config.NumberColumn(format="localized"),
+            })
 
         # Evolución mensual cuando hay un vendedor seleccionado
         if sel_vend_rank != "Todos":
             st.markdown(f"#### 📅 Facturación mensual — {sel_vend_rank}")
             ventas_rank_vend = ventas_g[ventas_g["vendedor"] == sel_vend_rank]
-            st.dataframe(tabla_mensual(ventas_rank_vend), use_container_width=True)
+            pivot_rank_vend = tabla_mensual(ventas_rank_vend)
+            st.dataframe(pivot_rank_vend, use_container_width=True, column_config=money_column_config(pivot_rank_vend))
 
             evol_rv = ventas_rank_vend.groupby(["año","mes"])["facturacion"].sum().reset_index()
             evol_rv["periodo"] = pd.to_datetime(
@@ -2023,7 +2070,8 @@ elif rol == "Gerencia":
             ventas_mens = ventas_g[ventas_g["vendedor"] == sel_vend_mens]
 
         st.markdown(f"#### Facturación mensual — {sel_vend_mens}")
-        st.dataframe(tabla_mensual(ventas_mens), use_container_width=True)
+        pivot_mens_g = tabla_mensual(ventas_mens)
+        st.dataframe(pivot_mens_g, use_container_width=True, column_config=money_column_config(pivot_mens_g))
         evol_g = ventas_mens.groupby(["año","mes"])["facturacion"].sum().reset_index()
         evol_g["año"] = evol_g["año"].astype(str)
         fig = px.bar(evol_g, x="mes", y="facturacion", color="año", barmode="group",
@@ -2046,11 +2094,10 @@ elif rol == "Gerencia":
         tabla_vm = tabla_vm.reindex(sorted(tabla_vm.columns), axis=1)
         tabla_vm.columns = [c.strftime("%b %Y") for c in tabla_vm.columns]
         tabla_vm["Total"] = tabla_vm.sum(axis=1)
-        tabla_vm = tabla_vm.sort_values("Total", ascending=False)
-        for col in tabla_vm.columns:
-            tabla_vm[col] = tabla_vm[col].apply(fmt_peso)
+        tabla_vm = tabla_vm.sort_values("Total", ascending=False).round(0)
+        col_config_vm = money_column_config(tabla_vm)
         tabla_vm = tabla_vm.reset_index().rename(columns={"vendedor": "Vendedor"})
-        st.dataframe(tabla_vm, use_container_width=True, hide_index=True)
+        st.dataframe(tabla_vm, use_container_width=True, hide_index=True, column_config=col_config_vm)
 
     with t_marc_g:
         tab_analisis_marcas(ventas_g, base_g, key_prefix="ger", vendedores_disponibles=todos_vend)
