@@ -23,6 +23,23 @@ MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"
 MESES_FULL = {1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
               7:"Julio",8:"Agosto",9:"Septiembre",10:"Octubre",11:"Noviembre",12:"Diciembre"}
 
+GRUPOS_MARCAS_PRINCIPALES = {
+    "NEBRASKA":       "NEBRASKA Y FINISTERRE",
+    "FINISTERRE":     "NEBRASKA Y FINISTERRE",
+    "DEWALT":         "GRUPO STANLEY",
+    "STANLEY":        "GRUPO STANLEY",
+    "BLACK & DECKER": "GRUPO STANLEY",
+    "BOSCH":          "BOSCH",
+    "DREMEL":         "BOSCH",
+    "SKIL":           "BOSCH",
+    "TYROLIT":        "TYROLIT",
+}
+
+def agrupar_marca_principal(marca):
+    if pd.isna(marca):
+        return marca
+    return GRUPOS_MARCAS_PRINCIPALES.get(str(marca).strip().upper(), "RESTO")
+
 
 # ── Carga de datos ────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Cargando datos...")
@@ -1285,6 +1302,16 @@ with st.sidebar:
         value=False,
         key="ver_baja_susp",
     )
+    marcas_principales = st.checkbox(
+        "Marcas Principales",
+        value=False,
+        key="marcas_principales",
+        help=(
+            "Agrupa las marcas en NEBRASKA Y FINISTERRE, GRUPO STANLEY "
+            "(Dewalt/Stanley/Black & Decker), BOSCH (Bosch/Dremel/Skil) y "
+            "TYROLIT. El resto de las marcas se agrupan como RESTO."
+        ),
+    )
     st.markdown("**🔽 Filtrar por tipo de cliente:**")
 
     df_base_activa = df_base if ver_baja_susp else df_base[df_base["estado_base"] == "activo"]
@@ -1321,6 +1348,10 @@ with st.sidebar:
         key="filtro_tipo_cliente",
     )
 
+# Agrupar marcas (afecta TODOS los análisis que usan la columna "marca")
+if marcas_principales:
+    df_ventas["marca"] = df_ventas["marca"].apply(agrupar_marca_principal)
+
 # Aplicar filtros a la base de clientes (afecta TODOS los análisis)
 df_base_filtrada = df_base_activa.copy()
 if sel_clasif:
@@ -1340,6 +1371,7 @@ if ver_baja_susp:  filtros_activos.append("Incluye baja/susp")
 if sel_clasif:     filtros_activos.append(f"Clasif: {', '.join(sel_clasif)}")
 if sel_subclasif:  filtros_activos.append(f"Subclasif: {', '.join(sel_subclasif)}")
 if sel_tipo_cliente: filtros_activos.append(f"Tipo cliente: {', '.join(sel_tipo_cliente)}")
+if marcas_principales: filtros_activos.append("Marcas Principales")
 if filtros_activos:
     st.info(f"🔽 Filtro activo: {' | '.join(filtros_activos)}")
 
