@@ -1310,25 +1310,48 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
     fecha_max = df["fecha_alta"].max().date()
     col1, col2 = st.columns(2)
     with col1:
-        desde = st.date_input("Desde", value=fecha_min, min_value=fecha_min, max_value=fecha_max,
+        desde = st.date_input("Desde", value=None, min_value=fecha_min, max_value=fecha_max,
                                key=f"{key_prefix}_desde")
     with col2:
-        hasta = st.date_input("Hasta", value=fecha_max, min_value=fecha_min, max_value=fecha_max,
+        hasta = st.date_input("Hasta", value=None, min_value=fecha_min, max_value=fecha_max,
                                key=f"{key_prefix}_hasta")
+
+    vend_sel = []
+    if mostrar_vendedor:
+        vend_opts = sorted(df["vendedor_asignado"].dropna().unique().tolist())
+        vend_sel = st.multiselect(
+            "Filtrar por vendedor:", options=vend_opts, default=[],
+            placeholder="Todos los vendedores", key=f"{key_prefix}_vend",
+        )
+
+    if desde is None or hasta is None:
+        st.info("Seleccioná un período (Desde / Hasta) para ver las altas de clientes.")
+        return
     if desde > hasta:
         st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
         return
 
     df_rango = df[(df["fecha_alta"] >= pd.Timestamp(desde)) & (df["fecha_alta"] <= pd.Timestamp(hasta))].copy()
+    if vend_sel:
+        df_rango = df_rango[df_rango["vendedor_asignado"].isin(vend_sel)]
     if df_rango.empty:
-        st.info("No hay altas de clientes en el período seleccionado.")
+        st.info("No hay altas de clientes con los filtros seleccionados.")
         return
 
     df_rango["periodo_alta"] = df_rango["fecha_alta"].values.astype("datetime64[M]")
 
-    altas_mes = df_rango.groupby("periodo_alta").size().reset_index(name="altas")
+    st.metric("Total altas en el período", len(df_rango))
+
+    altas_mes = df_rango.groupby("periodo_alta").size().reset_index(name="altas").sort_values("periodo_alta")
+
+    st.markdown("#### Altas mes a mes")
+    tabla_mensual = altas_mes.copy()
+    tabla_mensual["periodo_alta"] = tabla_mensual["periodo_alta"].dt.strftime("%b %Y")
+    tabla_mensual.columns = ["Mes", "Altas"]
+    st.dataframe(tabla_mensual, use_container_width=True, hide_index=True)
+
     fig = px.bar(
-        altas_mes.sort_values("periodo_alta"), x="periodo_alta", y="altas",
+        altas_mes, x="periodo_alta", y="altas",
         title="Altas de clientes por mes",
         labels={"periodo_alta": "", "altas": "Clientes nuevos"},
         color_discrete_sequence=["#0066cc"], text="altas",
@@ -1338,7 +1361,6 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
     st.plotly_chart(fig, use_container_width=True)
 
     if not mostrar_vendedor:
-        st.metric("Total altas en el período", len(df_rango))
         return
 
     st.markdown("---")
