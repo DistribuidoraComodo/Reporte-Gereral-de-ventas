@@ -2106,6 +2106,25 @@ elif rol == "Gerencia":
         fig.update_layout(xaxis=dict(tickmode="array", tickvals=list(range(1,13)), ticktext=MESES))
         st.plotly_chart(fig, use_container_width=True)
 
+        st.markdown("---")
+        st.markdown("#### Facturación mensual por vendedor")
+        tabla_vm = (
+            ventas_rank.groupby(["vendedor", "año", "mes"])["facturacion"].sum()
+            .reset_index()
+        )
+        tabla_vm["periodo"] = pd.to_datetime(
+            tabla_vm["año"].astype(str) + "-" + tabla_vm["mes"].astype(str).str.zfill(2) + "-01"
+        )
+        tabla_vm = tabla_vm.pivot(index="vendedor", columns="periodo", values="facturacion").fillna(0)
+        tabla_vm = tabla_vm.reindex(sorted(tabla_vm.columns), axis=1)
+        tabla_vm.columns = [c.strftime("%b %Y") for c in tabla_vm.columns]
+        tabla_vm["Total"] = tabla_vm.sum(axis=1)
+        tabla_vm = tabla_vm.sort_values("Total", ascending=False)
+        for col in tabla_vm.columns:
+            tabla_vm[col] = tabla_vm[col].apply(fmt_peso)
+        tabla_vm = tabla_vm.reset_index().rename(columns={"vendedor": "Vendedor"})
+        st.dataframe(tabla_vm, use_container_width=True, hide_index=True)
+
     with t_evol:
         evol_t = ventas_g.groupby(["año","mes"])["facturacion"].sum().reset_index()
         evol_t["periodo"] = pd.to_datetime(
