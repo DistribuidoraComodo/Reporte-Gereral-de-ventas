@@ -66,9 +66,23 @@ def cargar_datos(archivo):
         "cantidad","facturacion","familia","rubro","subrubro","marca",
         "clasificacion","subclasificacion","localidad","provincia",
     ]
-    # "Tipo Cliente" se agregó como columna nueva al final; se busca por nombre
-    # de header (no por posición) para no depender de dónde quede ubicada.
+    # "Tipo Cliente" y "Clasificación (Aux.)" se agregaron como columnas nuevas al
+    # final; se buscan por nombre de header (no por posición) para no depender de
+    # dónde queden ubicadas.
     col_tipo_cliente_v = _find_col(df_v_raw, ["tipocliente"])
+
+    def _norm_sin_acentos(s):
+        s = str(s).lower().replace(" ", "").replace("_", "").replace(".", "").replace("(", "").replace(")", "")
+        for a, b in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u")]:
+            s = s.replace(a, b)
+        return s
+
+    col_clasif_aux_v = None
+    for c in df_v_raw.columns:
+        norm = _norm_sin_acentos(c)
+        if "clasificacion" in norm and "aux" in norm:
+            col_clasif_aux_v = c
+            break
 
     df_v = df_v_raw.iloc[:, :len(nombres_v)].copy()
     df_v.columns = nombres_v
@@ -77,6 +91,11 @@ def cargar_datos(archivo):
         df_v.loc[df_v["tipo_cliente_venta"].isin(["", "nan", "None"]), "tipo_cliente_venta"] = None
     else:
         df_v["tipo_cliente_venta"] = None
+    if col_clasif_aux_v:
+        df_v["clasificacion_aux"] = df_v_raw[col_clasif_aux_v].astype(str).str.strip()
+        df_v.loc[df_v["clasificacion_aux"].isin(["", "nan", "None"]), "clasificacion_aux"] = None
+    else:
+        df_v["clasificacion_aux"] = None
     df_v["fecha"] = pd.to_datetime(df_v["fecha"], errors="coerce")
     df_v = df_v.dropna(subset=["fecha","facturacion"])
     df_v["año"] = df_v["fecha"].dt.year
@@ -146,6 +165,12 @@ def cargar_datos(archivo):
         df_b["tipo_cliente"] = df_b["tipo_cliente"].fillna(
             df_b["tipo_cliente_base"].astype(str).str.strip().replace({"": None, "nan": None})
         )
+
+    # -- Clasificación (Aux.): último valor no nulo en Ventas. Reemplaza a la
+    # Clasificación/Subclasificación de la Base clientes como filtro global.
+    ventas_con_clasif_aux = df_v.dropna(subset=["clasificacion_aux"]).sort_values("fecha")
+    clasif_aux_por_ventas = ventas_con_clasif_aux.groupby("cod_cliente")["clasificacion_aux"].last()
+    df_b["clasificacion_aux"] = df_b["cod_cliente"].map(clasif_aux_por_ventas)
 
     # -- Hoja Base artículos (descripción limpia, sin lote) --
     df_art = None
@@ -1396,6 +1421,121 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
     )
 
 
+def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True):
+    """Alertas de concentración de marca: clientes tipo 'Clientes A/B/C' cuya facturación
+    depende en gran parte de una sola marca que no sea Nebraska/Finisterre."""
+    if "tipo_cliente" not in base_df.columns or base_df["tipo_cliente"].dropna().empty:
+        st.info("No hay clientes con 'Tipo de cliente' cargado en la base.")
+        return
+
+    tipo_map = base_df[["cod_cliente", "tipo_cliente"]].dropna(subset=["tipo_cliente"]).drop_duplicates("cod_cliente")
+    clientes_tipo = tipo_map[
+        tipo_map["tipo_cliente"].astype(str).str.upper().str.startswith("CLIENTES")
+    ]["cod_cliente"]
+
+    if clientes_tipo.empty:
+        st.info("No hay clientes con tipo 'Clientes A/B/C' en la base.")
+        return
+
+    va = ventas_df[ventas_df["cod_cliente"].isin(clientes_tipo) & ventas_df["marca"].notna()].copy()
+    if va.empty:
+        st.info("No hay ventas de clientes tipo 'Clientes A/B/C' en el período cargado.")
+        return
+
+    umbral = st.slider(
+        "🔺 Alertar si una sola marca (que no sea Nebraska/Finisterre) representa más de:",
+        min_value=50, max_value=100, value=80, step=5, format="%d%%",
+        key=f"{key_prefix}_umbral",
+    )
+
+    fecha_min = va["fecha"].min().date()
+    fecha_max = va["fecha"].max().date()
+    cf1, cf2 = st.columns(2)
+    with cf1:
+        al_desde = st.date_input("Desde", value=fecha_min, min_value=fecha_min,
+                                  max_value=fecha_max, key=f"{key_prefix}_desde")
+    with cf2:
+        al_hasta = st.date_input("Hasta", value=fecha_max, min_value=fecha_min,
+                                  max_value=fecha_max, key=f"{key_prefix}_hasta")
+    if al_desde > al_hasta:
+        st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
+        return
+
+    va = va[(va["fecha"] >= pd.Timestamp(al_desde)) & (va["fecha"] <= pd.Timestamp(al_hasta))]
+    if va.empty:
+        st.warning("No hay ventas en el período seleccionado.")
+        return
+
+    total_cli = va.groupby("cod_cliente")["facturacion"].sum().rename("fact_total")
+    marca_cli = (
+        va.groupby(["cod_cliente", "marca"])["facturacion"].sum()
+        .rename("fact_marca").reset_index()
+        .merge(total_cli, on="cod_cliente")
+    )
+    marca_cli = marca_cli[marca_cli["fact_total"] > 0]
+    marca_cli["pct"] = marca_cli["fact_marca"] / marca_cli["fact_total"] * 100
+    marca_cli["marca_norm"] = marca_cli["marca"].astype(str).str.strip().str.upper()
+
+    alertas = marca_cli[
+        ~marca_cli["marca_norm"].isin(["NEBRASKA", "FINISTERRE"]) &
+        (marca_cli["pct"] >= umbral)
+    ].copy()
+
+    info_cli = (
+        va.sort_values("fecha").groupby("cod_cliente")
+        .agg(cliente=("cliente", "last"), vendedor=("vendedor", "last"))
+        .reset_index()
+    )
+    alertas = alertas.merge(info_cli, on="cod_cliente", how="left")
+    alertas = alertas[alertas["vendedor"].notna()]
+
+    if alertas.empty:
+        st.success(f"✅ No hay clientes con concentración ≥{umbral}% en una sola marca (fuera de Nebraska/Finisterre).")
+        return
+
+    alertas = alertas.sort_values("pct", ascending=False)
+
+    if mostrar_resumen_vendedor:
+        st.markdown("#### 📋 Resumen de alertas por vendedor")
+        resumen_vend = (
+            alertas.groupby("vendedor").size().reset_index(name="alertas")
+            .sort_values("alertas", ascending=False)
+        )
+        st.dataframe(resumen_vend.rename(columns={"vendedor": "Vendedor", "alertas": "Alertas"}),
+                     use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        vends_opts = ["Todos"] + sorted(alertas["vendedor"].dropna().unique().tolist())
+        sel_vend_al = st.selectbox("Filtrar por vendedor:", vends_opts, key=f"{key_prefix}_vend_sel")
+        if sel_vend_al != "Todos":
+            alertas = alertas[alertas["vendedor"] == sel_vend_al]
+
+    st.markdown(f"#### 🔎 Detalle de alertas ({len(alertas)})")
+
+    tbl = alertas.copy()
+    tbl["fact_marca"] = tbl["fact_marca"].round(0)
+    tbl["fact_total"] = tbl["fact_total"].round(0)
+    tbl["pct"] = tbl["pct"].clip(upper=100).apply(lambda x: f"{x:.1f}%")
+    cols = ["cliente", "vendedor", "marca", "pct", "fact_marca", "fact_total"] if mostrar_resumen_vendedor \
+        else ["cliente", "marca", "pct", "fact_marca", "fact_total"]
+    tbl = tbl[cols]
+    rename = {"cliente": "Cliente", "vendedor": "Vendedor", "marca": "Marca dominante",
+              "pct": "% Concentración", "fact_marca": "Fact. marca", "fact_total": "Fact. total cliente"}
+    tbl.columns = [rename[c] for c in cols]
+    st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
+        "Fact. marca": st.column_config.NumberColumn(format="localized"),
+        "Fact. total cliente": st.column_config.NumberColumn(format="localized"),
+    })
+
+    st.download_button(
+        "📥 Descargar alertas",
+        tbl.to_csv(index=False).encode("utf-8"),
+        file_name=f"alertas_concentracion_marca_{al_desde}_{al_hasta}.csv",
+        mime="text/csv",
+        key=f"{key_prefix}_dl",
+    )
+
+
 def mapa_clientes(resumen, df_coords, color_por="estado", add_vendedor_col=None, byn=False):
     merged = resumen.merge(
         df_coords[["cod_cliente","latitud","longitud"]], on="cod_cliente", how="inner"
@@ -1529,27 +1669,13 @@ with st.sidebar:
 
     df_base_activa = df_base if ver_baja_susp else df_base[df_base["estado_base"] == "activo"]
 
-    clasif_opts = sorted(df_base_activa["clasificacion"].dropna().unique().tolist())
-    sel_clasif = st.multiselect(
-        "Clasificación:",
-        options=clasif_opts,
+    clasif_aux_opts = sorted(df_base_activa["clasificacion_aux"].dropna().unique().tolist())
+    sel_clasif_aux = st.multiselect(
+        "Clasificación (Aux.):",
+        options=clasif_aux_opts,
         default=[],
         placeholder="Todas",
-        key="filtro_clasif",
-    )
-
-    # Subclasificación dinámica según clasificación elegida
-    if sel_clasif:
-        base_para_sub = df_base_activa[df_base_activa["clasificacion"].isin(sel_clasif)]
-    else:
-        base_para_sub = df_base_activa
-    subclasif_opts = sorted(base_para_sub["subclasificacion"].dropna().unique().tolist())
-    sel_subclasif = st.multiselect(
-        "Subclasificación:",
-        options=subclasif_opts,
-        default=[],
-        placeholder="Todas",
-        key="filtro_subclasif",
+        key="filtro_clasif_aux",
     )
 
     tipo_cliente_opts = sorted(df_base_activa["tipo_cliente"].dropna().unique().tolist())
@@ -1567,10 +1693,8 @@ if marcas_principales:
 
 # Aplicar filtros a la base de clientes (afecta TODOS los análisis)
 df_base_filtrada = df_base_activa.copy()
-if sel_clasif:
-    df_base_filtrada = df_base_filtrada[df_base_filtrada["clasificacion"].isin(sel_clasif)]
-if sel_subclasif:
-    df_base_filtrada = df_base_filtrada[df_base_filtrada["subclasificacion"].isin(sel_subclasif)]
+if sel_clasif_aux:
+    df_base_filtrada = df_base_filtrada[df_base_filtrada["clasificacion_aux"].isin(sel_clasif_aux)]
 if sel_tipo_cliente:
     df_base_filtrada = df_base_filtrada[df_base_filtrada["tipo_cliente"].isin(sel_tipo_cliente)]
 
@@ -1581,8 +1705,7 @@ df_ventas_filtrada = df_ventas[df_ventas["cod_cliente"].isin(clientes_filtrados)
 # Mostrar badge de filtros activos
 filtros_activos = []
 if ver_baja_susp:  filtros_activos.append("Incluye baja/susp")
-if sel_clasif:     filtros_activos.append(f"Clasif: {', '.join(sel_clasif)}")
-if sel_subclasif:  filtros_activos.append(f"Subclasif: {', '.join(sel_subclasif)}")
+if sel_clasif_aux: filtros_activos.append(f"Clasif. aux: {', '.join(sel_clasif_aux)}")
 if sel_tipo_cliente: filtros_activos.append(f"Tipo cliente: {', '.join(sel_tipo_cliente)}")
 if marcas_principales: filtros_activos.append("Marcas Principales")
 if filtros_activos:
@@ -1982,12 +2105,12 @@ elif rol == "Gerencia":
 
     st.divider()
 
-    tab_labels_g = ["👥 Ranking","📅 Mensual","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente","⚖️ Comparar períodos","🆕 Altas de clientes"]
+    tab_labels_g = ["👥 Ranking","📅 Mensual","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente","⚖️ Comparar períodos","🆕 Altas de clientes","🚨 Alertas"]
     if df_coords is not None:
         tab_labels_g.append("🗺️ Mapa")
     tabs_g = st.tabs(tab_labels_g)
-    t_rank, t_mens, t_marc_g, t_mix_g, t_sem_g, t_tipo_g, t_comp_g, t_altas_g = tabs_g[:8]
-    t_mapa = tabs_g[8] if df_coords is not None else None
+    t_rank, t_mens, t_marc_g, t_mix_g, t_sem_g, t_tipo_g, t_comp_g, t_altas_g, t_alertas_g = tabs_g[:9]
+    t_mapa = tabs_g[9] if df_coords is not None else None
 
     with t_rank:
         # Usar el vendedor de la hoja Ventas (quien realmente vendió), no la asignación de la base.
@@ -2116,6 +2239,9 @@ elif rol == "Gerencia":
 
     with t_altas_g:
         tab_altas_clientes(base_g, key_prefix="ger_altas", mostrar_vendedor=True)
+
+    with t_alertas_g:
+        tab_alertas(ventas_g, base_g, key_prefix="ger_alertas", mostrar_resumen_vendedor=True)
 
     if t_mapa is not None:
         with t_mapa:
