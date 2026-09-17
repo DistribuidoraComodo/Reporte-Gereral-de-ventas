@@ -1461,7 +1461,10 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
         return
 
-    if not st.button("🔍 Calcular alertas", key=f"{key_prefix}_calc"):
+    calc_key = f"{key_prefix}_calculado"
+    if st.button("🔍 Calcular alertas", key=f"{key_prefix}_calc"):
+        st.session_state[calc_key] = True
+    if not st.session_state.get(calc_key, False):
         st.info("Presioná el botón para generar el análisis (evita recalcularlo en cada carga de la página).")
         return
 
