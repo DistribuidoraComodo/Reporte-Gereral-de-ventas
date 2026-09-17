@@ -477,7 +477,7 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
 
         st.download_button(
             "📥 Descargar matriz",
-            piv_show.reset_index().to_csv(index=False).encode("utf-8"),
+            piv_show.reset_index().to_csv(index=False, sep=";").encode("utf-8-sig"),
             file_name="semaforo_vendedor_marca.csv",
             mime="text/csv", key=f"{key_prefix}_dl_matriz")
 
@@ -540,7 +540,7 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
 
     st.download_button(
         "📥 Descargar lista de clientes",
-        tbl_det.to_csv(index=False).encode("utf-8"),
+        tbl_det.to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name="clientes_semaforo.csv",
         mime="text/csv", key=f"{key_prefix}_dl_cli")
 
@@ -747,7 +747,7 @@ def tab_analisis_marcas(ventas_df, base_df, key_prefix="", vendedores_disponible
 
     st.download_button(
         "📥 Descargar lista",
-        tbl.to_csv(index=False).encode("utf-8"),
+        tbl.to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name=f"clientes_{marca_sel.strip().replace(' ','_')}_{exclusividad}pct.csv",
         mime="text/csv",
         key=f"{key_prefix}_dl"
@@ -1287,7 +1287,7 @@ def tab_comparador_periodos(ventas_df, base_df, key_prefix=""):
 
     st.download_button(
         "📥 Descargar comparación completa",
-        tbl.to_csv(index=False).encode("utf-8"),
+        tbl.to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name=f"comparacion_{periodo_a}_vs_{periodo_b}_{dim_sel}.csv".replace(" ", "_"),
         mime="text/csv",
         key=f"{key_prefix}_dl",
@@ -1414,7 +1414,7 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
     st.download_button(
         "📥 Descargar detalle de altas",
         df_rango[["cod_cliente", "razon_social", "vendedor_asignado", "fecha_alta"]]
-        .sort_values("fecha_alta", ascending=False).to_csv(index=False).encode("utf-8"),
+        .sort_values("fecha_alta", ascending=False).to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name=f"altas_clientes_{desde}_{hasta}.csv",
         mime="text/csv",
         key=f"{key_prefix}_dl",
@@ -1548,7 +1548,7 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
 
     st.download_button(
         "📥 Descargar alertas",
-        tbl.to_csv(index=False).encode("utf-8"),
+        tbl.to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name=f"alertas_marcas_no_propias_{al_desde}_{al_hasta}.csv",
         mime="text/csv",
         key=f"{key_prefix}_dl",
@@ -1924,7 +1924,7 @@ if rol == "Vendedor":
 
             st.download_button(
                 "📥 Descargar lista para gestión",
-                df_i.to_csv(index=False).encode("utf-8"),
+                df_i.to_csv(index=False, sep=";").encode("utf-8-sig"),
                 file_name=f"inactivos_{nombre_limpio.replace(' ','_')}_{desde}_{hasta}.csv",
                 mime="text/csv",
             )
