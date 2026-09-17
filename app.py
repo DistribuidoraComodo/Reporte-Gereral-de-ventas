@@ -1437,19 +1437,17 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         st.info("No hay clientes con tipo 'Clientes A/B/C' en la base.")
         return
 
-    va = ventas_df[ventas_df["cod_cliente"].isin(clientes_tipo) & ventas_df["marca"].notna()].copy()
-    if va.empty:
-        st.info("No hay ventas de clientes tipo 'Clientes A/B/C' en el período cargado.")
-        return
-
     umbral = st.slider(
         "🔺 Alertar si el total de marcas que no sean Nebraska/Finisterre representa más de:",
         min_value=50, max_value=100, value=80, step=5, format="%d%%",
         key=f"{key_prefix}_umbral",
     )
 
-    fecha_min = va["fecha"].min().date()
-    fecha_max = va["fecha"].max().date()
+    # Rangos de fecha desde ventas_df directamente (reducción liviana, sin
+    # filtrar ni copiar el dataframe completo) para no pagar el costo pesado
+    # de armar `va` en cada carga de la página, se use o no esta solapa.
+    fecha_min = ventas_df["fecha"].min().date()
+    fecha_max = ventas_df["fecha"].max().date()
     cf1, cf2 = st.columns(2)
     with cf1:
         al_desde = st.date_input("Desde", value=fecha_min, min_value=fecha_min,
@@ -1466,6 +1464,12 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         st.session_state[calc_key] = True
     if not st.session_state.get(calc_key, False):
         st.info("Presioná el botón para generar el análisis (evita recalcularlo en cada carga de la página).")
+        return
+
+    # A partir de acá recién se toca el dataframe completo de ventas.
+    va = ventas_df[ventas_df["cod_cliente"].isin(clientes_tipo) & ventas_df["marca"].notna()].copy()
+    if va.empty:
+        st.info("No hay ventas de clientes tipo 'Clientes A/B/C' en el período cargado.")
         return
 
     va = va[(va["fecha"] >= pd.Timestamp(al_desde)) & (va["fecha"] <= pd.Timestamp(al_hasta))]
