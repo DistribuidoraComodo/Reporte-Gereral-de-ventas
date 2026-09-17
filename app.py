@@ -1461,6 +1461,10 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
         return
 
+    if not st.button("🔍 Calcular alertas", key=f"{key_prefix}_calc"):
+        st.info("Presioná el botón para generar el análisis (evita recalcularlo en cada carga de la página).")
+        return
+
     va = va[(va["fecha"] >= pd.Timestamp(al_desde)) & (va["fecha"] <= pd.Timestamp(al_hasta))]
     if va.empty:
         st.warning("No hay ventas en el período seleccionado.")
