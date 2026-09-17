@@ -1423,7 +1423,7 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
 
 def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True):
     """Alertas de concentración de marca: clientes tipo 'Clientes A/B/C' cuya facturación
-    depende en gran parte de una sola marca que no sea Nebraska/Finisterre."""
+    depende en gran parte (combinado) de marcas que no sean Nebraska/Finisterre."""
     if "tipo_cliente" not in base_df.columns or base_df["tipo_cliente"].dropna().empty:
         st.info("No hay clientes con 'Tipo de cliente' cargado en la base.")
         return
@@ -1443,7 +1443,7 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         return
 
     umbral = st.slider(
-        "🔺 Alertar si una sola marca (que no sea Nebraska/Finisterre) representa más de:",
+        "🔺 Alertar si el total de marcas que no sean Nebraska/Finisterre representa más de:",
         min_value=50, max_value=100, value=80, step=5, format="%d%%",
         key=f"{key_prefix}_umbral",
     )
@@ -1466,20 +1466,26 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         st.warning("No hay ventas en el período seleccionado.")
         return
 
-    total_cli = va.groupby("cod_cliente")["facturacion"].sum().rename("fact_total")
-    marca_cli = (
-        va.groupby(["cod_cliente", "marca"])["facturacion"].sum()
-        .rename("fact_marca").reset_index()
-        .merge(total_cli, on="cod_cliente")
-    )
-    marca_cli = marca_cli[marca_cli["fact_total"] > 0]
-    marca_cli["pct"] = marca_cli["fact_marca"] / marca_cli["fact_total"] * 100
-    marca_cli["marca_norm"] = marca_cli["marca"].astype(str).str.strip().str.upper()
+    va["marca_norm"] = va["marca"].astype(str).str.strip().str.upper()
+    va["es_propia"] = va["marca_norm"].isin(["NEBRASKA", "FINISTERRE"])
 
-    alertas = marca_cli[
-        ~marca_cli["marca_norm"].isin(["NEBRASKA", "FINISTERRE"]) &
-        (marca_cli["pct"] >= umbral)
-    ].copy()
+    total_cli = va.groupby("cod_cliente")["facturacion"].sum().rename("fact_total")
+    otras_cli = (
+        va[~va["es_propia"]].groupby("cod_cliente")["facturacion"].sum().rename("fact_otras")
+    )
+    resumen_cli = pd.concat([total_cli, otras_cli], axis=1).fillna(0).reset_index()
+    resumen_cli = resumen_cli[resumen_cli["fact_total"] > 0]
+    resumen_cli["pct"] = resumen_cli["fact_otras"] / resumen_cli["fact_total"] * 100
+
+    alertas = resumen_cli[resumen_cli["pct"] >= umbral].copy()
+
+    # Marca no-propia con mayor facturación de cada cliente, solo a modo de referencia
+    top_marca_otras = (
+        va[~va["es_propia"]].groupby(["cod_cliente", "marca"])["facturacion"].sum()
+        .reset_index().sort_values("facturacion", ascending=False)
+        .drop_duplicates("cod_cliente")[["cod_cliente", "marca"]]
+    )
+    alertas = alertas.merge(top_marca_otras, on="cod_cliente", how="left")
 
     info_cli = (
         va.sort_values("fecha").groupby("cod_cliente")
@@ -1490,7 +1496,7 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
     alertas = alertas[alertas["vendedor"].notna()]
 
     if alertas.empty:
-        st.success(f"✅ No hay clientes con concentración ≥{umbral}% en una sola marca (fuera de Nebraska/Finisterre).")
+        st.success(f"✅ No hay clientes con ≥{umbral}% de su facturación fuera de Nebraska/Finisterre.")
         return
 
     alertas = alertas.sort_values("pct", ascending=False)
@@ -1513,24 +1519,26 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
     st.markdown(f"#### 🔎 Detalle de alertas ({len(alertas)})")
 
     tbl = alertas.copy()
-    tbl["fact_marca"] = tbl["fact_marca"].round(0)
+    tbl["fact_otras"] = tbl["fact_otras"].round(0)
     tbl["fact_total"] = tbl["fact_total"].round(0)
     tbl["pct"] = tbl["pct"].clip(upper=100).apply(lambda x: f"{x:.1f}%")
-    cols = ["cliente", "vendedor", "marca", "pct", "fact_marca", "fact_total"] if mostrar_resumen_vendedor \
-        else ["cliente", "marca", "pct", "fact_marca", "fact_total"]
+    tbl["marca"] = tbl["marca"].fillna("—")
+    cols = ["cliente", "vendedor", "marca", "pct", "fact_otras", "fact_total"] if mostrar_resumen_vendedor \
+        else ["cliente", "marca", "pct", "fact_otras", "fact_total"]
     tbl = tbl[cols]
-    rename = {"cliente": "Cliente", "vendedor": "Vendedor", "marca": "Marca dominante",
-              "pct": "% Concentración", "fact_marca": "Fact. marca", "fact_total": "Fact. total cliente"}
+    rename = {"cliente": "Cliente", "vendedor": "Vendedor", "marca": "Marca no propia principal",
+              "pct": "% Fuera de Nebraska/Finisterre", "fact_otras": "Fact. otras marcas",
+              "fact_total": "Fact. total cliente"}
     tbl.columns = [rename[c] for c in cols]
     st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
-        "Fact. marca": st.column_config.NumberColumn(format="localized"),
+        "Fact. otras marcas": st.column_config.NumberColumn(format="localized"),
         "Fact. total cliente": st.column_config.NumberColumn(format="localized"),
     })
 
     st.download_button(
         "📥 Descargar alertas",
         tbl.to_csv(index=False).encode("utf-8"),
-        file_name=f"alertas_concentracion_marca_{al_desde}_{al_hasta}.csv",
+        file_name=f"alertas_marcas_no_propias_{al_desde}_{al_hasta}.csv",
         mime="text/csv",
         key=f"{key_prefix}_dl",
     )
