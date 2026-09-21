@@ -292,6 +292,19 @@ def get_vendedores(df_base):
     return v
 
 
+def ventas_rank_vendedor(ventas_g, sel_vend, vdf_g):
+    """Ventas de Gerencia con vendedor real válido (excluye códigos dummy),
+    respetando el filtro de vendedor del sidebar. Usada por Ranking y Mensual."""
+    excluir_vend = set(str(c) for c in EXCLUIR_CODIGOS)
+    ventas_rank = ventas_g[ventas_g["cod_vendedor"].notna()].copy()
+    ventas_rank = ventas_rank[~ventas_rank["cod_vendedor"].astype(str).str.replace(r'\.0$','',regex=True).isin(excluir_vend)]
+    ventas_rank = ventas_rank[ventas_rank["vendedor"].notna()]
+    if sel_vend:
+        cods_str = set(str(int(c)) for c in vdf_g[vdf_g["vendedor_asignado"].isin(sel_vend)]["cod_vendedor"].dropna())
+        ventas_rank = ventas_rank[ventas_rank["cod_vendedor"].astype(str).str.replace(r'\.0$','',regex=True).isin(cods_str)]
+    return ventas_rank
+
+
 @st.cache_data(show_spinner="Calculando resumen de clientes...")
 def resumen_clientes(df_base_cod, df_ventas_cod, hoy_str):
     """
@@ -2196,22 +2209,18 @@ elif rol == "Gerencia":
     tab_labels_g = ["👥 Ranking","📅 Mensual","🔍 Análisis de marcas","🔍 Mix por cliente","🚦 Semáforo","🧩 Tipo de cliente","⚖️ Comparar períodos","🆕 Altas de clientes","🚨 Alertas"]
     if df_coords is not None:
         tab_labels_g.append("🗺️ Mapa")
-    tabs_g = st.tabs(tab_labels_g)
-    t_rank, t_mens, t_marc_g, t_mix_g, t_sem_g, t_tipo_g, t_comp_g, t_altas_g, t_alertas_g = tabs_g[:9]
-    t_mapa = tabs_g[9] if df_coords is not None else None
+    # Se usa un selector en vez de st.tabs(): en Streamlit el contenido de TODAS
+    # las tabs se ejecuta en cada recarga aunque no se estén mirando, lo que
+    # multiplicaba el pico de memoria de la página (varias tablas grandes
+    # calculadas a la vez). Con este selector solo corre el código de la
+    # sección elegida.
+    tab_actual_g = st.radio("Sección:", tab_labels_g, horizontal=True, key="ger_seccion")
+    st.markdown("---")
 
-    with t_rank:
+    if tab_actual_g == "👥 Ranking":
         # Usar el vendedor de la hoja Ventas (quien realmente vendió), no la asignación de la base.
         # Así no se pierden ventas de clientes que no están en la base o están reasignados.
-        excluir_vend = set(str(c) for c in EXCLUIR_CODIGOS)
-        ventas_rank = ventas_g[ventas_g["cod_vendedor"].notna()].copy()
-        ventas_rank = ventas_rank[~ventas_rank["cod_vendedor"].astype(str).str.replace(r'\.0$','',regex=True).isin(excluir_vend)]
-        ventas_rank = ventas_rank[ventas_rank["vendedor"].notna()]
-
-        # Si se filtró por vendedor en sidebar, respetar ese filtro
-        if sel_vend:
-            cods_str = set(str(int(c)) for c in vdf_g[vdf_g["vendedor_asignado"].isin(sel_vend)]["cod_vendedor"].dropna())
-            ventas_rank = ventas_rank[ventas_rank["cod_vendedor"].astype(str).str.replace(r'\.0$','',regex=True).isin(cods_str)]
+        ventas_rank = ventas_rank_vendedor(ventas_g, sel_vend, vdf_g)
 
         # Filtro por vendedor dentro del ranking
         vends_rank_opts = ["Todos"] + sorted(ventas_rank["vendedor"].dropna().unique().tolist())
@@ -2270,7 +2279,9 @@ elif rol == "Gerencia":
         with st.expander("📊 Resumen por clasificación y subclasificación"):
             resumen_clasificacion(base_g, ventas_g)
 
-    with t_mens:
+    elif tab_actual_g == "📅 Mensual":
+        ventas_rank = ventas_rank_vendedor(ventas_g, sel_vend, vdf_g)
+
         # Filtro por vendedor dentro del panel mensual
         vends_mens = ["Todos"] + sorted(ventas_rank["vendedor"].dropna().unique().tolist())
         sel_vend_mens = st.selectbox("Ver vendedor:", vends_mens, key="mens_vend_g")
@@ -2310,85 +2321,84 @@ elif rol == "Gerencia":
         tabla_vm = tabla_vm.reset_index().rename(columns={"vendedor": "Vendedor"})
         st.dataframe(tabla_vm, use_container_width=True, hide_index=True, column_config=col_config_vm)
 
-    with t_marc_g:
+    elif tab_actual_g == "🔍 Análisis de marcas":
         tab_analisis_marcas(ventas_g, base_g, key_prefix="ger", vendedores_disponibles=todos_vend)
 
-    with t_mix_g:
+    elif tab_actual_g == "🔍 Mix por cliente":
         tab_mix_cliente(ventas_g, base_g, key_prefix="ger_mix")
 
-    with t_sem_g:
+    elif tab_actual_g == "🚦 Semáforo":
         tab_semaforo(ventas_g, base_g, key_prefix="ger_sem")
 
-    with t_tipo_g:
+    elif tab_actual_g == "🧩 Tipo de cliente":
         tab_analisis_tipo_cliente(ventas_g, base_g, key_prefix="ger_tipo")
 
-    with t_comp_g:
+    elif tab_actual_g == "⚖️ Comparar períodos":
         tab_comparador_periodos(ventas_g, base_g, key_prefix="ger_comp")
 
-    with t_altas_g:
+    elif tab_actual_g == "🆕 Altas de clientes":
         tab_altas_clientes(base_g, key_prefix="ger_altas", mostrar_vendedor=True)
 
-    with t_alertas_g:
+    elif tab_actual_g == "🚨 Alertas":
         tab_alertas(ventas_g, base_g, key_prefix="ger_alertas", mostrar_resumen_vendedor=True)
 
-    if t_mapa is not None:
-        with t_mapa:
-            gm1, gm2 = st.columns(2)
-            with gm1:
-                gmap_desde = st.date_input("Desde (actividad)", value=df_ventas["fecha"].min().date(),
-                                           min_value=df_ventas["fecha"].min().date(),
-                                           max_value=df_ventas["fecha"].max().date(), key="gmap_desde")
-                gmap_hasta = st.date_input("Hasta (actividad)", value=df_ventas["fecha"].max().date(),
-                                           min_value=df_ventas["fecha"].min().date(),
-                                           max_value=df_ventas["fecha"].max().date(), key="gmap_hasta")
-                inact_dias_g = st.slider("Días sin compra = inactivo", 30, 365, 90, 15, key="gmap_dias")
-            with gm2:
-                col_opt_g = st.radio("Colorear por:", ["Estado (activo/inactivo)", "Vendedor"], key="gmap_color")
-                vends_mapa = sorted(base_g["vendedor_asignado"].dropna().unique().tolist())
-                sel_vend_mapa = st.multiselect("Vendedores en mapa:", vends_mapa, default=[], placeholder="Todos", key="gmap_vend")
+    elif tab_actual_g == "🗺️ Mapa":
+        gm1, gm2 = st.columns(2)
+        with gm1:
+            gmap_desde = st.date_input("Desde (actividad)", value=df_ventas["fecha"].min().date(),
+                                       min_value=df_ventas["fecha"].min().date(),
+                                       max_value=df_ventas["fecha"].max().date(), key="gmap_desde")
+            gmap_hasta = st.date_input("Hasta (actividad)", value=df_ventas["fecha"].max().date(),
+                                       min_value=df_ventas["fecha"].min().date(),
+                                       max_value=df_ventas["fecha"].max().date(), key="gmap_hasta")
+            inact_dias_g = st.slider("Días sin compra = inactivo", 30, 365, 90, 15, key="gmap_dias")
+        with gm2:
+            col_opt_g = st.radio("Colorear por:", ["Estado (activo/inactivo)", "Vendedor"], key="gmap_color")
+            vends_mapa = sorted(base_g["vendedor_asignado"].dropna().unique().tolist())
+            sel_vend_mapa = st.multiselect("Vendedores en mapa:", vends_mapa, default=[], placeholder="Todos", key="gmap_vend")
 
-            resumen_g_full = resumen_clientes(base_g, ventas_g, hoy_real.strftime("%Y-%m-%d"))
-            resumen_g_full = resumen_g_full.merge(
-                base_g[["cod_cliente","vendedor_asignado"]].drop_duplicates("cod_cliente"), on="cod_cliente", how="left")
+        resumen_g_full = resumen_clientes(base_g, ventas_g, hoy_real.strftime("%Y-%m-%d"))
+        resumen_g_full = resumen_g_full.merge(
+            base_g[["cod_cliente","vendedor_asignado"]].drop_duplicates("cod_cliente"), on="cod_cliente", how="left")
 
-            provs_g = sorted(resumen_g_full["provincia"].dropna().unique().tolist())
-            sel_prov_g = st.multiselect("Provincia:", provs_g, default=[], placeholder="Todas", key="gmap_prov")
-            locs_base_g = resumen_g_full[resumen_g_full["provincia"].isin(sel_prov_g)] if sel_prov_g else resumen_g_full
-            locs_g = sorted(locs_base_g["localidad"].dropna().unique().tolist())
-            sel_loc_g = st.multiselect("Localidad:", locs_g, default=[], placeholder="Todas", key="gmap_loc")
+        provs_g = sorted(resumen_g_full["provincia"].dropna().unique().tolist())
+        sel_prov_g = st.multiselect("Provincia:", provs_g, default=[], placeholder="Todas", key="gmap_prov")
+        locs_base_g = resumen_g_full[resumen_g_full["provincia"].isin(sel_prov_g)] if sel_prov_g else resumen_g_full
+        locs_g = sorted(locs_base_g["localidad"].dropna().unique().tolist())
+        sel_loc_g = st.multiselect("Localidad:", locs_g, default=[], placeholder="Todas", key="gmap_loc")
 
-            # Recalcular estado según rango y umbral
-            ventas_rango_g_map = ventas_g[
-                (ventas_g["fecha"] >= pd.Timestamp(gmap_desde)) &
-                (ventas_g["fecha"] <= pd.Timestamp(gmap_hasta))
-            ]
-            ultima_g = ventas_rango_g_map.groupby("cod_cliente")["fecha"].max().reset_index()
-            ultima_g.columns = ["cod_cliente","ultima_rango"]
-            resumen_g_map = resumen_g_full.merge(ultima_g, on="cod_cliente", how="left")
-            ref_g = pd.Timestamp(gmap_hasta)
-            resumen_g_map["dias_rango"] = resumen_g_map["ultima_rango"].apply(
-                lambda x: (ref_g - x).days if pd.notna(x) else 9999)
-            resumen_g_map["estado"] = resumen_g_map["dias_rango"].apply(
-                lambda d: "ACTIVO" if d <= inact_dias_g else ("INACTIVO" if d < 9999 else "SIN COMPRAS"))
+        # Recalcular estado según rango y umbral
+        ventas_rango_g_map = ventas_g[
+            (ventas_g["fecha"] >= pd.Timestamp(gmap_desde)) &
+            (ventas_g["fecha"] <= pd.Timestamp(gmap_hasta))
+        ]
+        ultima_g = ventas_rango_g_map.groupby("cod_cliente")["fecha"].max().reset_index()
+        ultima_g.columns = ["cod_cliente","ultima_rango"]
+        resumen_g_map = resumen_g_full.merge(ultima_g, on="cod_cliente", how="left")
+        ref_g = pd.Timestamp(gmap_hasta)
+        resumen_g_map["dias_rango"] = resumen_g_map["ultima_rango"].apply(
+            lambda x: (ref_g - x).days if pd.notna(x) else 9999)
+        resumen_g_map["estado"] = resumen_g_map["dias_rango"].apply(
+            lambda d: "ACTIVO" if d <= inact_dias_g else ("INACTIVO" if d < 9999 else "SIN COMPRAS"))
 
-            if sel_vend_mapa:
-                resumen_g_map = resumen_g_map[resumen_g_map["vendedor_asignado"].isin(sel_vend_mapa)]
-            if sel_prov_g:
-                resumen_g_map = resumen_g_map[resumen_g_map["provincia"].isin(sel_prov_g)]
-            if sel_loc_g:
-                resumen_g_map = resumen_g_map[resumen_g_map["localidad"].isin(sel_loc_g)]
+        if sel_vend_mapa:
+            resumen_g_map = resumen_g_map[resumen_g_map["vendedor_asignado"].isin(sel_vend_mapa)]
+        if sel_prov_g:
+            resumen_g_map = resumen_g_map[resumen_g_map["provincia"].isin(sel_prov_g)]
+        if sel_loc_g:
+            resumen_g_map = resumen_g_map[resumen_g_map["localidad"].isin(sel_loc_g)]
 
-            color_por_g = "estado" if "Estado" in col_opt_g else "vendedor"
-            usar_byn_g = st.toggle("🖤 Modo blanco y negro (mayor contraste)", value=False, key="gmap_byn")
-            fig_m, conteos_g = mapa_clientes(resumen_g_map, df_coords, color_por=color_por_g,
-                                             add_vendedor_col="vendedor_asignado", byn=usar_byn_g)
-            if fig_m:
-                n_a = conteos_g.get("ACTIVO", 0)
-                n_i = conteos_g.get("INACTIVO", 0)
-                n_s = conteos_g.get("SIN COMPRAS", 0)
-                n_m = conteos_g.get("total_mapa", 0)
-                n_b = conteos_g.get("total_base", 0)
-                st.markdown(f"""
+        color_por_g = "estado" if "Estado" in col_opt_g else "vendedor"
+        usar_byn_g = st.toggle("🖤 Modo blanco y negro (mayor contraste)", value=False, key="gmap_byn")
+        fig_m, conteos_g = mapa_clientes(resumen_g_map, df_coords, color_por=color_por_g,
+                                         add_vendedor_col="vendedor_asignado", byn=usar_byn_g)
+        if fig_m:
+            n_a = conteos_g.get("ACTIVO", 0)
+            n_i = conteos_g.get("INACTIVO", 0)
+            n_s = conteos_g.get("SIN COMPRAS", 0)
+            n_m = conteos_g.get("total_mapa", 0)
+            n_b = conteos_g.get("total_base", 0)
+            st.markdown(f"""
 <div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap">
   <div style="background:#d4f7dc;border-left:4px solid #28a745;padding:8px 20px;border-radius:6px;min-width:110px">
     <div style="font-size:11px;color:#555;font-weight:600">✅ ACTIVOS</div>
@@ -2408,6 +2418,6 @@ elif rol == "Gerencia":
   </div>
 </div>
 """, unsafe_allow_html=True)
-                st.plotly_chart(fig_m, use_container_width=True)
-            else:
-                st.warning("No se encontraron coordenadas. Verificá que los códigos de cliente coincidan.")
+            st.plotly_chart(fig_m, use_container_width=True)
+        else:
+            st.warning("No se encontraron coordenadas. Verificá que los códigos de cliente coincidan.")
