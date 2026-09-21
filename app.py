@@ -1528,6 +1528,20 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         st.success(f"✅ No hay clientes con ≥{umbral}% de su facturación fuera de Nebraska/Finisterre.")
         return
 
+    # Promedio de facturación mensual: fact_total dividido por los meses transcurridos
+    # desde el PRIMER movimiento del cliente dentro del período (no desde el inicio
+    # del período elegido), para no diluir el promedio de clientes nuevos con meses
+    # sin actividad. Ej.: período = todo 2026, primera venta en marzo → promedia
+    # marzo-agosto (6 meses), no enero-agosto.
+    primera_venta_cli = va.groupby("cod_cliente")["fecha"].min().rename("primera_venta")
+    alertas = alertas.merge(primera_venta_cli, on="cod_cliente", how="left")
+    meses_activo = (
+        (al_hasta.year - alertas["primera_venta"].dt.year) * 12
+        + (al_hasta.month - alertas["primera_venta"].dt.month)
+        + 1
+    ).clip(lower=1)
+    alertas["fact_promedio_mensual"] = alertas["fact_total"] / meses_activo
+
     # Cantidad de operaciones concretadas: facturas (FV) del cliente en el período,
     # descontando las que tienen una Nota de Crédito asociada. No hay un ID que
     # vincule directamente una FV con su NC, así que se relacionan por importe
@@ -1609,23 +1623,25 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
     tbl = alertas.copy()
     tbl["fact_otras"] = tbl["fact_otras"].round(0)
     tbl["fact_total"] = tbl["fact_total"].round(0)
+    tbl["fact_promedio_mensual"] = tbl["fact_promedio_mensual"].round(0)
     tbl["pct"] = tbl["pct"].clip(upper=100).apply(lambda x: f"{x:.1f}%")
     tbl["marca"] = tbl["marca"].fillna("—")
     tbl["fecha_alta"] = tbl["fecha_alta"].apply(
         lambda x: x.strftime("%d/%m/%Y") if pd.notna(x) else "—"
     )
-    cols = ["cliente", "vendedor", "marca", "pct", "fact_otras", "fact_total", "operaciones", "fecha_alta"] \
+    cols = ["cliente", "vendedor", "marca", "pct", "fact_otras", "fact_total", "fact_promedio_mensual", "operaciones", "fecha_alta"] \
         if mostrar_resumen_vendedor \
-        else ["cliente", "marca", "pct", "fact_otras", "fact_total", "operaciones", "fecha_alta"]
+        else ["cliente", "marca", "pct", "fact_otras", "fact_total", "fact_promedio_mensual", "operaciones", "fecha_alta"]
     tbl = tbl[cols]
     rename = {"cliente": "Cliente", "vendedor": "Vendedor", "marca": "Marca no propia principal",
               "pct": "% Fuera de Nebraska/Finisterre", "fact_otras": "Fact. otras marcas",
-              "fact_total": "Fact. total cliente", "operaciones": "Operaciones concretadas",
-              "fecha_alta": "Cliente desde"}
+              "fact_total": "Fact. total cliente", "fact_promedio_mensual": "Fact. promedio mensual",
+              "operaciones": "Operaciones concretadas", "fecha_alta": "Cliente desde"}
     tbl.columns = [rename[c] for c in cols]
     st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
         "Fact. otras marcas": st.column_config.NumberColumn(format="localized"),
         "Fact. total cliente": st.column_config.NumberColumn(format="localized"),
+        "Fact. promedio mensual": st.column_config.NumberColumn(format="localized"),
     })
 
     st.download_button(
