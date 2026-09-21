@@ -1551,7 +1551,11 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         return
 
     va["marca_norm"] = va["marca"].astype(str).str.strip().str.upper()
-    va["es_propia"] = va["marca_norm"].isin(["NEBRASKA", "FINISTERRE"])
+    # Si el checkbox "Marcas Principales" está activo, `marca` ya viene agrupada
+    # (NEBRASKA y FINISTERRE se combinan en "NEBRASKA Y FINISTERRE"), así que hay
+    # que reconocer también esa etiqueta agrupada como marca propia.
+    marcas_propias = {"NEBRASKA", "FINISTERRE", GRUPOS_MARCAS_PRINCIPALES["NEBRASKA"]}
+    va["es_propia"] = va["marca_norm"].isin(marcas_propias)
 
     total_cli = va.groupby("cod_cliente")["facturacion"].sum().rename("fact_total")
     otras_cli = (
