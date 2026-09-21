@@ -1510,6 +1510,61 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         st.success(f"✅ No hay clientes con ≥{umbral}% de su facturación fuera de Nebraska/Finisterre.")
         return
 
+    # Cantidad de operaciones concretadas: facturas (FV) del cliente en el período,
+    # descontando las que tienen una Nota de Crédito asociada. No hay un ID que
+    # vincule directamente una FV con su NC, así que se relacionan por importe
+    # (una FV de $X se da por anulada si el cliente tiene una NC de -$X).
+    if {"cbte", "pto_vta", "n_cbte"}.issubset(ventas_df.columns):
+        vop = ventas_df[
+            ventas_df["cod_cliente"].isin(alertas["cod_cliente"])
+            & (ventas_df["fecha"] >= pd.Timestamp(al_desde))
+            & (ventas_df["fecha"] <= pd.Timestamp(al_hasta))
+        ]
+        cbte_str = vop["cbte"].astype(str).str.strip().str.upper()
+        es_fv = cbte_str.str.startswith("FV") | (cbte_str == "FE")
+        es_nc = cbte_str.str.startswith("NC")
+
+        comprobantes = (
+            vop[es_fv | es_nc]
+            .assign(es_fv=es_fv[es_fv | es_nc])
+            .groupby(["cod_cliente", "cbte", "pto_vta", "n_cbte"])
+            .agg(importe=("facturacion", "sum"), es_fv=("es_fv", "first"))
+            .reset_index()
+        )
+        comprobantes["importe_r"] = comprobantes["importe"].round(2)
+
+        facturas = comprobantes[comprobantes["es_fv"]]
+        notas_credito = comprobantes[~comprobantes["es_fv"]].copy()
+        notas_credito["importe_r"] = -notas_credito["importe_r"]
+
+        fv_counts = facturas.groupby(["cod_cliente", "importe_r"]).size().reset_index(name="n_fv")
+        nc_counts = notas_credito.groupby(["cod_cliente", "importe_r"]).size().reset_index(name="n_nc")
+        match = fv_counts.merge(nc_counts, on=["cod_cliente", "importe_r"], how="left")
+        match["n_nc"] = match["n_nc"].fillna(0)
+        match["canceladas"] = match[["n_fv", "n_nc"]].min(axis=1)
+
+        total_fv_cli = facturas.groupby("cod_cliente").size().rename("total_fv")
+        canceladas_cli = match.groupby("cod_cliente")["canceladas"].sum().rename("canceladas")
+        operaciones_cli = pd.concat([total_fv_cli, canceladas_cli], axis=1).fillna(0)
+        operaciones_cli["operaciones"] = (
+            operaciones_cli["total_fv"] - operaciones_cli["canceladas"]
+        ).astype(int)
+        alertas = alertas.merge(
+            operaciones_cli["operaciones"].reset_index(), on="cod_cliente", how="left"
+        )
+    else:
+        alertas["operaciones"] = pd.NA
+    alertas["operaciones"] = alertas["operaciones"].fillna(0).astype(int)
+
+    # Fecha de alta del cliente (si está cargada en la base)
+    if "fecha_alta" in base_df.columns:
+        alertas = alertas.merge(
+            base_df[["cod_cliente", "fecha_alta"]].drop_duplicates("cod_cliente"),
+            on="cod_cliente", how="left",
+        )
+    else:
+        alertas["fecha_alta"] = pd.NaT
+
     alertas = alertas.sort_values("pct", ascending=False)
 
     if mostrar_resumen_vendedor:
@@ -1534,12 +1589,17 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
     tbl["fact_total"] = tbl["fact_total"].round(0)
     tbl["pct"] = tbl["pct"].clip(upper=100).apply(lambda x: f"{x:.1f}%")
     tbl["marca"] = tbl["marca"].fillna("—")
-    cols = ["cliente", "vendedor", "marca", "pct", "fact_otras", "fact_total"] if mostrar_resumen_vendedor \
-        else ["cliente", "marca", "pct", "fact_otras", "fact_total"]
+    tbl["fecha_alta"] = tbl["fecha_alta"].apply(
+        lambda x: x.strftime("%d/%m/%Y") if pd.notna(x) else "—"
+    )
+    cols = ["cliente", "vendedor", "marca", "pct", "fact_otras", "fact_total", "operaciones", "fecha_alta"] \
+        if mostrar_resumen_vendedor \
+        else ["cliente", "marca", "pct", "fact_otras", "fact_total", "operaciones", "fecha_alta"]
     tbl = tbl[cols]
     rename = {"cliente": "Cliente", "vendedor": "Vendedor", "marca": "Marca no propia principal",
               "pct": "% Fuera de Nebraska/Finisterre", "fact_otras": "Fact. otras marcas",
-              "fact_total": "Fact. total cliente"}
+              "fact_total": "Fact. total cliente", "operaciones": "Operaciones concretadas",
+              "fecha_alta": "Cliente desde"}
     tbl.columns = [rename[c] for c in cols]
     st.dataframe(tbl, use_container_width=True, hide_index=True, column_config={
         "Fact. otras marcas": st.column_config.NumberColumn(format="localized"),
