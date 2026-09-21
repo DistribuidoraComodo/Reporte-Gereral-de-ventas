@@ -1515,18 +1515,22 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
     # vincule directamente una FV con su NC, así que se relacionan por importe
     # (una FV de $X se da por anulada si el cliente tiene una NC de -$X).
     if {"cbte", "pto_vta", "n_cbte"}.issubset(ventas_df.columns):
-        vop = ventas_df[
-            ventas_df["cod_cliente"].isin(alertas["cod_cliente"])
+        # Se opera sobre columnas mínimas (no todo `ventas_df`, que tiene ~25
+        # columnas incluyendo texto pesado como descripción/rubro) para no
+        # duplicar memoria de más en el cálculo bajo demanda de esta solapa.
+        cbte_str = ventas_df["cbte"].astype(str).str.strip().str.upper()
+        es_fv_full = cbte_str.str.startswith("FV") | (cbte_str == "FE")
+        es_nc_full = cbte_str.str.startswith("NC")
+        mask_op = (
+            (es_fv_full | es_nc_full)
+            & ventas_df["cod_cliente"].isin(alertas["cod_cliente"])
             & (ventas_df["fecha"] >= pd.Timestamp(al_desde))
             & (ventas_df["fecha"] <= pd.Timestamp(al_hasta))
-        ]
-        cbte_str = vop["cbte"].astype(str).str.strip().str.upper()
-        es_fv = cbte_str.str.startswith("FV") | (cbte_str == "FE")
-        es_nc = cbte_str.str.startswith("NC")
+        )
+        vop = ventas_df.loc[mask_op, ["cod_cliente", "cbte", "pto_vta", "n_cbte", "facturacion"]]
 
         comprobantes = (
-            vop[es_fv | es_nc]
-            .assign(es_fv=es_fv[es_fv | es_nc])
+            vop.assign(es_fv=es_fv_full[mask_op])
             .groupby(["cod_cliente", "cbte", "pto_vta", "n_cbte"])
             .agg(importe=("facturacion", "sum"), es_fv=("es_fv", "first"))
             .reset_index()
