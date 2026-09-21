@@ -474,13 +474,14 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
     # ── 2. Matriz vendedor × marca ────────────────────────────────────────────
     st.markdown("#### 👥 Composición por vendedor y marca (% de su facturación)")
 
+    top_marcas = brand_g.head(12)["marca"].tolist()
+
     if not vf_sv.empty:
         total_vend = vf_sv.groupby("vendedor")["facturacion"].sum()
         pivot_vm   = (vf_sv.groupby(["vendedor", "marca"])["facturacion"]
                       .sum().unstack("marca", fill_value=0))
         pivot_pct  = pivot_vm.div(total_vend, axis=0) * 100
 
-        top_marcas = brand_g.head(12)["marca"].tolist()
         cols_show  = [m for m in top_marcas if m in pivot_pct.columns]
         piv_show   = pivot_pct[cols_show].round(1) if cols_show else pivot_pct.round(1)
         piv_show.index.name = "Vendedor"
@@ -556,6 +557,40 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
         tbl_det.to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name="clientes_semaforo.csv",
         mime="text/csv", key=f"{key_prefix}_dl_cli")
+
+    # ── 4. Composición por cliente y marca (mismo dato que la matriz de
+    # vendedores, pero a nivel cliente) — respeta el filtro de vendedor, pero
+    # no el de marca, para poder mostrar el % contra el resto de sus marcas.
+    st.markdown("---")
+    st.markdown("#### 🧭 Composición por cliente y marca (% de su facturación)")
+
+    vf_cli_matriz = vf_s[vf_s["cod_cliente"].notna() & vf_s["marca"].notna()].copy()
+    if sel_vend_s:
+        vf_cli_matriz = vf_cli_matriz[vf_cli_matriz["vendedor"].isin(sel_vend_s)]
+
+    if vf_cli_matriz.empty:
+        st.info("No hay clientes para mostrar con los filtros seleccionados.")
+    else:
+        total_cli_s = vf_cli_matriz.groupby("cod_cliente")["facturacion"].sum()
+        pivot_cm = (vf_cli_matriz.groupby(["cod_cliente", "marca"])["facturacion"]
+                    .sum().unstack("marca", fill_value=0))
+        pivot_cm_pct = pivot_cm.div(total_cli_s, axis=0) * 100
+
+        nombre_cli_s = vf_cli_matriz.groupby("cod_cliente")["cliente"].first()
+        pivot_cm_pct.index = pivot_cm_pct.index.map(nombre_cli_s)
+        pivot_cm_pct.index.name = "Cliente"
+
+        cols_show_cli = [m for m in top_marcas if m in pivot_cm_pct.columns]
+        piv_cli_show = pivot_cm_pct[cols_show_cli].round(1) if cols_show_cli else pivot_cm_pct.round(1)
+
+        piv_cli_fmt = piv_cli_show.map(lambda x: f"{x:.1f}%" if x > 0 else "—")
+        st.dataframe(piv_cli_fmt, use_container_width=True)
+
+        st.download_button(
+            "📥 Descargar matriz de clientes",
+            piv_cli_show.reset_index().to_csv(index=False, sep=";").encode("utf-8-sig"),
+            file_name="semaforo_cliente_marca.csv",
+            mime="text/csv", key=f"{key_prefix}_dl_matriz_cli")
 
 
 def resumen_clasificacion(base_df, ventas_df, resumen_df=None):
