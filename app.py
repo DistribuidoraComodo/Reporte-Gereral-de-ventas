@@ -2256,9 +2256,14 @@ elif rol == "Gerencia":
     compraron_mes = set(
         ventas_g[(ventas_g["año"]==año_act) & (ventas_g["mes"]==mes_act)]["cod_cliente"].dropna().unique()
     )
-    # Clientes en base: solo filtros de clasificación/subclasificación (sidebar izquierdo)
-    # NO se filtra por códigos de vendedor excluidos — es el universo real de la base
-    cods_base_kpi     = set(df_base_filtrada["cod_cliente"].dropna().unique())
+    # Clientes en base: si se filtró por vendedor en el panel izquierdo, se
+    # restringe a la cartera de ese/esos vendedor/es (mismo alcance que
+    # ventas_g/base_g). Sin filtro de vendedor, es el universo real de la base
+    # (incluye clientes en códigos de vendedor dummy/sin asignar).
+    if sel_vend:
+        cods_base_kpi = set(base_g["cod_cliente"].dropna().unique())
+    else:
+        cods_base_kpi = set(df_base_filtrada["cod_cliente"].dropna().unique())
     total_en_base     = len(cods_base_kpi)
     compraron_en_base = len(cods_base_kpi & compraron_mes)
     pct_cobertura     = compraron_en_base / total_en_base * 100 if total_en_base else 0
