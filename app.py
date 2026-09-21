@@ -1342,7 +1342,7 @@ def tab_comparador_periodos(ventas_df, base_df, key_prefix=""):
     )
 
 
-def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
+def tab_altas_clientes(base_df, ventas_df, key_prefix="", mostrar_vendedor=True):
     """Altas de clientes por mes, según 'fecha_alta' de la Base clientes."""
     df = base_df.dropna(subset=["fecha_alta"]).copy()
     if df.empty:
@@ -1397,7 +1397,24 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
 
     df_rango["periodo_alta"] = df_rango["fecha_alta"].values.astype("datetime64[M]")
 
-    st.metric("Total altas en el período", len(df_rango))
+    clientes_con_movimientos = set(ventas_df["cod_cliente"].dropna().unique())
+    df_rango["tiene_movimientos"] = df_rango["cod_cliente"].isin(clientes_con_movimientos)
+
+    total_altas   = len(df_rango)
+    altas_con_mov = int(df_rango["tiene_movimientos"].sum())
+    mc1, mc2 = st.columns(2)
+    mc1.metric("Total altas en el período", total_altas)
+    mc2.metric(
+        "Altas con movimientos", altas_con_mov,
+        f"{altas_con_mov / total_altas * 100:.0f}% del total" if total_altas else None,
+    )
+
+    solo_con_mov = st.checkbox("Mostrar solo altas con movimientos", key=f"{key_prefix}_solo_mov")
+    if solo_con_mov:
+        df_rango = df_rango[df_rango["tiene_movimientos"]]
+        if df_rango.empty:
+            st.info("No hay altas con movimientos para los filtros seleccionados.")
+            return
 
     altas_mes = df_rango.groupby("periodo_alta").size().reset_index(name="altas").sort_values("periodo_alta")
 
@@ -1451,17 +1468,20 @@ def tab_altas_clientes(base_df, key_prefix="", mostrar_vendedor=True):
                     detalle_click["periodo_alta"].dt.strftime("%b %Y") == col_sel
                 ]
             detalle_click = (
-                detalle_click[["cod_cliente", "razon_social", "fecha_alta"]]
+                detalle_click[["cod_cliente", "razon_social", "fecha_alta", "tiene_movimientos"]]
                 .sort_values("fecha_alta", ascending=False)
             )
             detalle_click["fecha_alta"] = detalle_click["fecha_alta"].dt.strftime("%d/%m/%Y")
-            detalle_click.columns = ["Código", "Cliente", "Fecha alta"]
+            detalle_click["tiene_movimientos"] = detalle_click["tiene_movimientos"].apply(
+                lambda x: "✅" if x else "— No compró"
+            )
+            detalle_click.columns = ["Código", "Cliente", "Fecha alta", "Compró"]
             st.markdown(f"##### Clientes — {vendedor_click} — {col_sel}")
             st.dataframe(detalle_click, use_container_width=True, hide_index=True)
 
     st.download_button(
         "📥 Descargar detalle de altas",
-        df_rango[["cod_cliente", "razon_social", "vendedor_asignado", "fecha_alta"]]
+        df_rango[["cod_cliente", "razon_social", "vendedor_asignado", "fecha_alta", "tiene_movimientos"]]
         .sort_values("fecha_alta", ascending=False).to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name=f"altas_clientes_{desde}_{hasta}.csv",
         mime="text/csv",
@@ -2109,7 +2129,7 @@ if rol == "Vendedor":
         tab_comparador_periodos(ventas_v, base_v, key_prefix="vend_comp")
 
     with tab_altas_v:
-        tab_altas_clientes(base_v, key_prefix="vend_altas", mostrar_vendedor=False)
+        tab_altas_clientes(base_v, ventas_v, key_prefix="vend_altas", mostrar_vendedor=False)
 
     if tab_map_v is not None:
         with tab_map_v:
@@ -2388,7 +2408,7 @@ elif rol == "Gerencia":
         tab_comparador_periodos(ventas_g, base_g, key_prefix="ger_comp")
 
     elif tab_actual_g == "🆕 Altas de clientes":
-        tab_altas_clientes(base_g, key_prefix="ger_altas", mostrar_vendedor=True)
+        tab_altas_clientes(base_g, ventas_g, key_prefix="ger_altas", mostrar_vendedor=True)
 
     elif tab_actual_g == "🚨 Alertas":
         tab_alertas(ventas_g, base_g, key_prefix="ger_alertas", mostrar_resumen_vendedor=True)
