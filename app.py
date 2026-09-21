@@ -1466,8 +1466,13 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
         st.info("Presioná el botón para generar el análisis (evita recalcularlo en cada carga de la página).")
         return
 
-    # A partir de acá recién se toca el dataframe completo de ventas.
-    va = ventas_df[ventas_df["cod_cliente"].isin(clientes_tipo) & ventas_df["marca"].notna()].copy()
+    # A partir de acá recién se toca el dataframe completo de ventas. Se
+    # proyectan solo las columnas que usa esta solapa (no las ~25 de
+    # `ventas_df`, varias de texto pesado) para no duplicar memoria de más.
+    cols_va = ["cod_cliente", "fecha", "cliente", "vendedor", "marca", "facturacion"]
+    va = ventas_df.loc[
+        ventas_df["cod_cliente"].isin(clientes_tipo) & ventas_df["marca"].notna(), cols_va
+    ].copy()
     if va.empty:
         st.info("No hay ventas de clientes tipo 'Clientes A/B/C' en el período cargado.")
         return
