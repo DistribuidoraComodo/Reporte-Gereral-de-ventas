@@ -41,6 +41,49 @@ def agrupar_marca_principal(marca):
     return GRUPOS_MARCAS_PRINCIPALES.get(str(marca).strip().upper(), "RESTO")
 
 
+def _categoria_corta(tipo_cliente):
+    """'CLIENTES A' -> 'A'; otros valores de Tipo de Cliente se muestran tal cual;
+    vacío/'0' -> ''."""
+    if pd.isna(tipo_cliente):
+        return ""
+    tc = str(tipo_cliente).strip()
+    if not tc or tc in ("0", "nan", "None"):
+        return ""
+    tc_up = tc.upper()
+    if tc_up.startswith("CLIENTES "):
+        return tc_up.replace("CLIENTES ", "", 1).strip()
+    return tc_up
+
+
+def con_categoria(nombre, tipo_cliente):
+    """Concatena la categoría del cliente (Tipo de Cliente) al nombre: 'NOMBRE (A)'."""
+    cat = _categoria_corta(tipo_cliente)
+    return f"{nombre} ({cat})" if cat else nombre
+
+
+def agregar_categoria(nombres, cods_cliente, base_df):
+    """Versión vectorizada de con_categoria para una columna de nombres + códigos de
+    cliente, resolviendo la categoría contra `base_df` (columnas cod_cliente/tipo_cliente)."""
+    tipo_map = (
+        base_df[["cod_cliente", "tipo_cliente"]]
+        .dropna(subset=["cod_cliente"])
+        .drop_duplicates("cod_cliente")
+        .set_index("cod_cliente")["tipo_cliente"]
+    )
+    cats = cods_cliente.map(tipo_map).map(_categoria_corta)
+    nombres = nombres.astype(str)
+    return nombres.where(cats == "", nombres + " (" + cats + ")")
+
+
+def default_desde_anio(fecha_min, fecha_max):
+    """1° de enero del año de `fecha_max` (o `fecha_min` si ese 1° de enero queda
+    fuera de rango) — usado como valor por defecto de los filtros 'Desde' para que
+    todas las pestañas arranquen mostrando el año en curso sin tener que aplicar el
+    filtro a mano en cada una."""
+    inicio_anio = pd.Timestamp(year=fecha_max.year, month=1, day=1).date()
+    return max(fecha_min, inicio_anio)
+
+
 # ── Carga de datos ────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Cargando datos...")
 def cargar_datos(archivo):
@@ -103,6 +146,38 @@ def cargar_datos(archivo):
     df_v["cod_vendedor"] = pd.to_numeric(df_v["cod_vendedor"], errors="coerce")
     df_v["cod_cliente"]  = pd.to_numeric(df_v["cod_cliente"],  errors="coerce")
 
+    # -- Hoja Vendedores (nombre completo, opcional) ---------------------------
+    # La columna "Vendedor" de la Base clientes solo trae "APELLIDO (COD)", sin
+    # nombre de pila. Si existe una hoja "Vendedores" con el nombre completo por
+    # código, se usa para reemplazar el nombre en toda la app (Ventas y Base).
+    vend_nombre_completo = {}
+    for h in hojas:
+        if h.strip().lower() == "vendedores":
+            try:
+                dvend = xls.parse(h)
+                dvend.columns = [str(c).strip() for c in dvend.columns]
+                col_cod_vend = _find_col(dvend, ["codigo", "código", "cod"])
+                col_nom_vend = _find_col(dvend, ["nombrereal"])
+                if not col_nom_vend:
+                    for c in dvend.columns:
+                        cl = c.lower().strip()
+                        if cl not in ("id", "codigo", "código", "cod") and "nombre" not in cl:
+                            col_nom_vend = c
+                            break
+                if col_cod_vend and col_nom_vend:
+                    dvend["_cod"] = pd.to_numeric(dvend[col_cod_vend], errors="coerce")
+                    dvend["_nom"] = dvend[col_nom_vend].astype(str).str.strip()
+                    vend_nombre_completo = (
+                        dvend.dropna(subset=["_cod"]).drop_duplicates("_cod")
+                        .set_index("_cod")["_nom"].to_dict()
+                    )
+            except Exception:
+                pass
+            break
+
+    if vend_nombre_completo:
+        df_v["vendedor"] = df_v["cod_vendedor"].map(vend_nombre_completo).fillna(df_v["vendedor"])
+
     # -- Hoja(s) Base clientes --
     def _procesar_base(df_b, estado_base):
         df_b = df_b.copy()
@@ -156,6 +231,8 @@ def cargar_datos(archivo):
         # Compatibilidad con formato anterior de una sola hoja "Base clientes"
         bases.append(_procesar_base(xls.parse("Base clientes"), "activo"))
     df_b = pd.concat(bases, ignore_index=True)
+    if vend_nombre_completo:
+        df_b["vendedor_asignado"] = df_b["cod_vendedor"].map(vend_nombre_completo).fillna(df_b["vendedor_asignado"])
 
     # -- Tipo de cliente: último valor no nulo en Ventas; si no hay, el de Base clientes --
     ventas_con_tipo = df_v.dropna(subset=["tipo_cliente_venta"]).sort_values("fecha")
@@ -323,6 +400,7 @@ def resumen_clientes(df_base_cod, df_ventas_cod, hoy_str):
     for _, row in df_base_cod.iterrows():
         cod     = row["cod_cliente"]
         nombre  = row.get("razon_social") or row.get("nombre_fantasia") or str(cod)
+        nombre  = con_categoria(nombre, row.get("tipo_cliente"))
         localidad = row.get("localidad", "-") or "-"
         provincia = row.get("provincia", "-") or "-"
         mail      = row.get("mail", "") or ""
@@ -410,7 +488,7 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
 
     sf1, sf2 = st.columns(2)
     with sf1:
-        sem_desde = st.date_input("Desde", value=fecha_min, min_value=fecha_min,
+        sem_desde = st.date_input("Desde", value=default_desde_anio(fecha_min, fecha_max), min_value=fecha_min,
                                   max_value=fecha_max, key=f"{key_prefix}_desde")
     with sf2:
         sem_hasta = st.date_input("Hasta", value=fecha_max, min_value=fecha_min,
@@ -541,6 +619,7 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
         .reset_index(drop=True)
     )
     cli_det.insert(0, "#", range(1, len(cli_det)+1))
+    cli_det["cliente"] = agregar_categoria(cli_det["cliente"], cli_det["cod_cliente"], base_df)
 
     tbl_det = cli_det.copy()
     tbl_det["facturacion"] = tbl_det["facturacion"].round(0)
@@ -577,13 +656,26 @@ def tab_semaforo(ventas_df, base_df, key_prefix="sem"):
         pivot_cm_pct = pivot_cm.div(total_cli_s, axis=0) * 100
 
         nombre_cli_s = vf_cli_matriz.groupby("cod_cliente")["cliente"].first()
+        nombre_cli_s = agregar_categoria(nombre_cli_s, nombre_cli_s.index.to_series(), base_df)
         pivot_cm_pct.index = pivot_cm_pct.index.map(nombre_cli_s)
         pivot_cm_pct.index.name = "Cliente"
 
         cols_show_cli = [m for m in top_marcas if m in pivot_cm_pct.columns]
         piv_cli_show = pivot_cm_pct[cols_show_cli].round(1) if cols_show_cli else pivot_cm_pct.round(1)
 
-        piv_cli_fmt = piv_cli_show.map(lambda x: f"{x:.1f}%" if x > 0 else "—")
+        busq_cli_s = st.text_input(
+            "🔎 Buscar cliente:", key=f"{key_prefix}_busq_cli",
+            placeholder="Escribí parte del nombre para ubicar un cliente puntual...",
+        )
+        piv_cli_mostrar = piv_cli_show
+        if busq_cli_s:
+            piv_cli_mostrar = piv_cli_show[
+                piv_cli_show.index.str.contains(busq_cli_s, case=False, na=False)
+            ]
+            if piv_cli_mostrar.empty:
+                st.info("No se encontraron clientes que coincidan con la búsqueda.")
+
+        piv_cli_fmt = piv_cli_mostrar.map(lambda x: f"{x:.1f}%" if x > 0 else "—")
         st.dataframe(piv_cli_fmt, use_container_width=True)
 
         st.download_button(
@@ -689,6 +781,7 @@ def mix_marcas_clientes(df_ventas_cod, df_base_cod):
     nombres = df_base_cod[["cod_cliente","razon_social"]].drop_duplicates("cod_cliente")
     grp = grp.merge(nombres, on="cod_cliente", how="left")
     grp["cliente"] = grp["razon_social"].fillna(grp["cod_cliente"].astype(str))
+    grp["cliente"] = agregar_categoria(grp["cliente"], grp["cod_cliente"], df_base_cod)
     return grp
 
 
@@ -701,7 +794,7 @@ def tab_analisis_marcas(ventas_df, base_df, key_prefix="", vendedores_disponible
 
     col_f1, col_f2, col_f3 = st.columns([1, 1, 2])
     with col_f1:
-        desde_m = st.date_input("Desde", value=fecha_min,
+        desde_m = st.date_input("Desde", value=default_desde_anio(fecha_min, fecha_max),
                                 min_value=fecha_min, max_value=fecha_max,
                                 key=f"{key_prefix}_desde_marca")
     with col_f2:
@@ -857,7 +950,7 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
     """Pestaña: buscar un cliente y ver su mix, KPIs, top artículos y detalle por artículo."""
     fecha_min = ventas_df["fecha"].min().date()
     fecha_max = ventas_df["fecha"].max().date()
-    default_desde = max(fecha_min, (pd.Timestamp(fecha_max) - pd.DateOffset(months=12)).date())
+    default_desde = default_desde_anio(fecha_min, fecha_max)
 
     # ── Fechas ────────────────────────────────────────────────────────────────
     col_d1, col_d2 = st.columns(2)
@@ -876,7 +969,7 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
     # ── Buscador de cliente (un solo desplegable con búsqueda incorporada) ─────
     st.markdown("#### 🔍 Buscar cliente")
     cols_base = ["cod_cliente", "razon_social", "vendedor_asignado"]
-    for col in ["nombre_fantasia", "fecha_alta"]:
+    for col in ["nombre_fantasia", "fecha_alta", "tipo_cliente"]:
         if col in base_df.columns:
             cols_base.append(col)
 
@@ -891,6 +984,10 @@ def tab_mix_cliente(ventas_df, base_df, key_prefix=""):
         return f"(cód. {int(row['cod_cliente'])})"
 
     candidatos["_display"] = candidatos.apply(_nombre, axis=1)
+    if "tipo_cliente" in base_df.columns:
+        candidatos["_display"] = agregar_categoria(
+            candidatos["_display"], candidatos["cod_cliente"], base_df
+        )
     candidatos["_opcion"] = candidatos.apply(
         lambda r: f"{r['_display']} — {int(r['cod_cliente'])}", axis=1
     )
@@ -1228,6 +1325,7 @@ def tab_analisis_tipo_cliente(ventas_df, base_df, key_prefix=""):
         .reset_index().sort_values("facturacion", ascending=False).head(20)
     )
     top_cli["facturacion"] = top_cli["facturacion"].round(0)
+    top_cli["cliente"] = agregar_categoria(top_cli["cliente"], top_cli["cod_cliente"], base_df)
     top_cli = top_cli[["cliente", "facturacion"]]
     col_fact_tc = f"Fact. {año_act_tc}"
     top_cli.columns = ["Cliente", col_fact_tc]
@@ -1303,6 +1401,13 @@ def tab_comparador_periodos(ventas_df, base_df, key_prefix=""):
     )
     comp = comp.sort_values("fact_b", ascending=False)
 
+    if dim_sel == "Cliente":
+        nombre_a_cod = (
+            df[["cliente", "cod_cliente"]].dropna().drop_duplicates("cliente")
+            .set_index("cliente")["cod_cliente"]
+        )
+        comp[col_dim] = agregar_categoria(comp[col_dim], comp[col_dim].map(nombre_a_cod), base_df)
+
     col_k1, col_k2, col_k3 = st.columns(3)
     col_k1.metric(f"Facturación {periodo_a}", fmt_peso(comp["fact_a"].sum()))
     col_k2.metric(f"Facturación {periodo_b}", fmt_peso(comp["fact_b"].sum()))
@@ -1344,6 +1449,14 @@ def tab_comparador_periodos(ventas_df, base_df, key_prefix=""):
 
 def tab_altas_clientes(base_df, ventas_df, key_prefix="", mostrar_vendedor=True):
     """Altas de clientes por mes, según 'fecha_alta' de la Base clientes."""
+    if st.session_state.get("filtro_clasif_aux") or st.session_state.get("filtro_tipo_cliente"):
+        st.caption(
+            "ℹ️ Esta solapa no aplica los filtros de 'Clasificación (Aux.)' / "
+            "'Tipo de cliente' del panel izquierdo: esos campos se calculan a partir "
+            "del historial de Ventas, así que filtrar por ellos dejaría solo clientes "
+            "que ya facturaron por definición y el % de 'Altas con movimientos' "
+            "quedaría siempre cerca del 100%."
+        )
     df = base_df.dropna(subset=["fecha_alta"]).copy()
     if df.empty:
         st.info("No hay clientes con fecha de alta cargada en la base.")
@@ -1367,10 +1480,11 @@ def tab_altas_clientes(base_df, ventas_df, key_prefix="", mostrar_vendedor=True)
     fecha_max = df["fecha_alta"].max().date()
     col1, col2 = st.columns(2)
     with col1:
-        desde = st.date_input("Desde", value=None, min_value=fecha_min, max_value=fecha_max,
+        desde = st.date_input("Desde", value=default_desde_anio(fecha_min, fecha_max),
+                               min_value=fecha_min, max_value=fecha_max,
                                key=f"{key_prefix}_desde")
     with col2:
-        hasta = st.date_input("Hasta", value=None, min_value=fecha_min, max_value=fecha_max,
+        hasta = st.date_input("Hasta", value=fecha_max, min_value=fecha_min, max_value=fecha_max,
                                key=f"{key_prefix}_hasta")
 
     vend_sel = []
@@ -1468,9 +1582,13 @@ def tab_altas_clientes(base_df, ventas_df, key_prefix="", mostrar_vendedor=True)
                     detalle_click["periodo_alta"].dt.strftime("%b %Y") == col_sel
                 ]
             detalle_click = (
-                detalle_click[["cod_cliente", "razon_social", "fecha_alta", "tiene_movimientos"]]
+                detalle_click[["cod_cliente", "razon_social", "tipo_cliente", "fecha_alta", "tiene_movimientos"]]
                 .sort_values("fecha_alta", ascending=False)
             )
+            detalle_click["razon_social"] = agregar_categoria(
+                detalle_click["razon_social"], detalle_click["cod_cliente"], base_df
+            )
+            detalle_click = detalle_click.drop(columns=["tipo_cliente"])
             detalle_click["fecha_alta"] = detalle_click["fecha_alta"].dt.strftime("%d/%m/%Y")
             detalle_click["tiene_movimientos"] = detalle_click["tiene_movimientos"].apply(
                 lambda x: "✅" if x else "— No compró"
@@ -1479,10 +1597,15 @@ def tab_altas_clientes(base_df, ventas_df, key_prefix="", mostrar_vendedor=True)
             st.markdown(f"##### Clientes — {vendedor_click} — {col_sel}")
             st.dataframe(detalle_click, use_container_width=True, hide_index=True)
 
+    df_descarga = df_rango[
+        ["cod_cliente", "razon_social", "vendedor_asignado", "fecha_alta", "tiene_movimientos"]
+    ].sort_values("fecha_alta", ascending=False).copy()
+    df_descarga["razon_social"] = agregar_categoria(
+        df_descarga["razon_social"], df_descarga["cod_cliente"], base_df
+    )
     st.download_button(
         "📥 Descargar detalle de altas",
-        df_rango[["cod_cliente", "razon_social", "vendedor_asignado", "fecha_alta", "tiene_movimientos"]]
-        .sort_values("fecha_alta", ascending=False).to_csv(index=False, sep=";").encode("utf-8-sig"),
+        df_descarga.to_csv(index=False, sep=";").encode("utf-8-sig"),
         file_name=f"altas_clientes_{desde}_{hasta}.csv",
         mime="text/csv",
         key=f"{key_prefix}_dl",
@@ -1518,7 +1641,7 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
     fecha_max = ventas_df["fecha"].max().date()
     cf1, cf2 = st.columns(2)
     with cf1:
-        al_desde = st.date_input("Desde", value=fecha_min, min_value=fecha_min,
+        al_desde = st.date_input("Desde", value=default_desde_anio(fecha_min, fecha_max), min_value=fecha_min,
                                   max_value=fecha_max, key=f"{key_prefix}_desde")
     with cf2:
         al_hasta = st.date_input("Hasta", value=fecha_max, min_value=fecha_min,
@@ -1680,6 +1803,7 @@ def tab_alertas(ventas_df, base_df, key_prefix="", mostrar_resumen_vendedor=True
     st.markdown(f"#### 🔎 Detalle de alertas ({len(alertas)})")
 
     tbl = alertas.copy()
+    tbl["cliente"] = agregar_categoria(tbl["cliente"], tbl["cod_cliente"], base_df)
     tbl["fact_otras"] = tbl["fact_otras"].round(0)
     tbl["fact_total"] = tbl["fact_total"].round(0)
     tbl["fact_promedio_mensual"] = tbl["fact_promedio_mensual"].round(0)
@@ -1902,6 +2026,12 @@ if rol == "Vendedor":
     base_v    = df_base_filtrada[df_base_filtrada["cod_vendedor"] == cod_sel].copy()
     total_cli_base = base_v["cod_cliente"].dropna().nunique()  # Contador puro de la base
 
+    # Base para "Altas de clientes" SIN los filtros de Clasificación (Aux.) / Tipo
+    # de cliente: esos dos campos se calculan a partir del historial de Ventas, así
+    # que filtrar por ellos deja solo clientes que ya facturaron por definición y
+    # rompe la métrica "Altas con movimientos" (siempre da ~100%).
+    base_v_altas = df_base_activa[df_base_activa["cod_vendedor"] == cod_sel].copy()
+
     # Ventas filtradas por cod_vendedor directamente desde la hoja Ventas completa
     # (igual que una tabla dinámica de Excel — incluye clientes que no están en la base)
     ventas_v  = df_ventas[df_ventas["cod_vendedor"] == cod_sel].copy()
@@ -1919,6 +2049,8 @@ if rol == "Vendedor":
             fila_base = df_base[df_base["cod_cliente"] == cod]
             ventas_cod = ventas_v[ventas_v["cod_cliente"] == cod]
             nombre_cli = ventas_cod["cliente"].iloc[0] if not ventas_cod.empty else str(cod)
+            tipo_cli_extra = fila_base["tipo_cliente"].iloc[0] if not fila_base.empty else None
+            nombre_cli = con_categoria(nombre_cli, tipo_cli_extra)
             fact_hist  = ventas_cod["facturacion"].sum()
             if not fila_base.empty:
                 vend_actual = fila_base["vendedor_asignado"].iloc[0]
@@ -2037,7 +2169,7 @@ if rol == "Vendedor":
 
         col_f1, col_f2, col_f3 = st.columns([1, 1, 2])
         with col_f1:
-            desde = st.date_input("Desde", value=fecha_max.replace(day=1), min_value=fecha_min, max_value=fecha_max, key="vinact_desde")
+            desde = st.date_input("Desde", value=default_desde_anio(fecha_min, fecha_max), min_value=fecha_min, max_value=fecha_max, key="vinact_desde")
         with col_f2:
             hasta = st.date_input("Hasta", value=fecha_max, min_value=fecha_min, max_value=fecha_max, key="vinact_hasta")
         with col_f3:
@@ -2133,14 +2265,15 @@ if rol == "Vendedor":
         tab_comparador_periodos(ventas_v, base_v, key_prefix="vend_comp")
 
     with tab_altas_v:
-        tab_altas_clientes(base_v, ventas_v, key_prefix="vend_altas", mostrar_vendedor=False)
+        tab_altas_clientes(base_v_altas, ventas_v, key_prefix="vend_altas", mostrar_vendedor=False)
 
     if tab_map_v is not None:
         with tab_map_v:
             # ── Filtros del mapa ──
             fm1, fm2 = st.columns(2)
             with fm1:
-                fmap_desde = st.date_input("Desde (actividad)", value=df_ventas["fecha"].min().date(),
+                fmap_desde = st.date_input("Desde (actividad)",
+                                           value=default_desde_anio(df_ventas["fecha"].min().date(), df_ventas["fecha"].max().date()),
                                            min_value=df_ventas["fecha"].min().date(),
                                            max_value=df_ventas["fecha"].max().date(), key="vmap_desde")
                 fmap_hasta = st.date_input("Hasta (actividad)", value=df_ventas["fecha"].max().date(),
@@ -2226,8 +2359,12 @@ elif rol == "Gerencia":
     if sel_vend:
         cods_sel = vdf_g[vdf_g["vendedor_asignado"].isin(sel_vend)]["cod_vendedor"].tolist()
         base_g   = df_base_filtrada[df_base_filtrada["cod_vendedor"].isin(cods_sel)].copy()
+        base_g_altas = df_base_activa[df_base_activa["cod_vendedor"].isin(cods_sel)].copy()
     else:
         base_g = df_base_filtrada[df_base_filtrada["cod_vendedor"].isin(vdf_g["cod_vendedor"])].copy()
+        base_g_altas = df_base_activa[df_base_activa["cod_vendedor"].isin(vdf_g["cod_vendedor"])].copy()
+    # Base para "Altas de clientes" SIN los filtros de Clasificación (Aux.) / Tipo de
+    # cliente: ver comentario equivalente en la vista Vendedor (base_v_altas).
 
     # Ventas: usar df_ventas completo (igual que Excel) para que los totales coincidan
     # Si hay filtro de vendedor, filtramos por cod_vendedor en la hoja de ventas
@@ -2417,7 +2554,7 @@ elif rol == "Gerencia":
         tab_comparador_periodos(ventas_g, base_g, key_prefix="ger_comp")
 
     elif tab_actual_g == "🆕 Altas de clientes":
-        tab_altas_clientes(base_g, ventas_g, key_prefix="ger_altas", mostrar_vendedor=True)
+        tab_altas_clientes(base_g_altas, ventas_g, key_prefix="ger_altas", mostrar_vendedor=True)
 
     elif tab_actual_g == "🚨 Alertas":
         tab_alertas(ventas_g, base_g, key_prefix="ger_alertas", mostrar_resumen_vendedor=True)
@@ -2425,7 +2562,8 @@ elif rol == "Gerencia":
     elif tab_actual_g == "🗺️ Mapa":
         gm1, gm2 = st.columns(2)
         with gm1:
-            gmap_desde = st.date_input("Desde (actividad)", value=df_ventas["fecha"].min().date(),
+            gmap_desde = st.date_input("Desde (actividad)",
+                                       value=default_desde_anio(df_ventas["fecha"].min().date(), df_ventas["fecha"].max().date()),
                                        min_value=df_ventas["fecha"].min().date(),
                                        max_value=df_ventas["fecha"].max().date(), key="gmap_desde")
             gmap_hasta = st.date_input("Hasta (actividad)", value=df_ventas["fecha"].max().date(),
